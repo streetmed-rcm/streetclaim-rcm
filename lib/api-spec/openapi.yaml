@@ -1,0 +1,1569 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: StreetClaim RCM API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: patients
+    description: Patient management
+  - name: encounters
+    description: Encounter (field visit) management
+  - name: claims
+    description: Claim lifecycle management
+  - name: chw
+    description: CHW/Peer Navigator time tracking
+  - name: payer-rules
+    description: Multi-payer rules engine
+  - name: sdoh
+    description: SDOH Z-code extraction
+  - name: adt
+    description: ADT inpatient status checking
+  - name: eligibility
+    description: Medi-Cal AEVS eligibility verification
+  - name: athena
+    description: Athenahealth EHR integration
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  # ─── PATIENTS ────────────────────────────────────────────────────────────────
+  /patients:
+    get:
+      operationId: listPatients
+      tags: [patients]
+      summary: List all patients
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of patients
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PatientListResponse"
+    post:
+      operationId: createPatient
+      tags: [patients]
+      summary: Create a new patient
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePatientRequest"
+      responses:
+        "201":
+          description: Patient created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Patient"
+
+  /patients/{patientId}:
+    get:
+      operationId: getPatient
+      tags: [patients]
+      summary: Get patient by ID
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Patient found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Patient"
+        "404":
+          description: Not found
+    put:
+      operationId: updatePatient
+      tags: [patients]
+      summary: Update a patient
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePatientRequest"
+      responses:
+        "200":
+          description: Patient updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Patient"
+
+  # ─── ENCOUNTERS ──────────────────────────────────────────────────────────────
+  /encounters:
+    get:
+      operationId: listEncounters
+      tags: [encounters]
+      summary: List encounters
+      parameters:
+        - name: patientId
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, pending_review, submitted, denied, paid]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of encounters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EncounterListResponse"
+    post:
+      operationId: createEncounter
+      tags: [encounters]
+      summary: Create a new field encounter (defaults POS 27)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEncounterRequest"
+      responses:
+        "201":
+          description: Encounter created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Encounter"
+
+  /encounters/{encounterId}:
+    get:
+      operationId: getEncounter
+      tags: [encounters]
+      summary: Get encounter by ID
+      parameters:
+        - name: encounterId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Encounter found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Encounter"
+    put:
+      operationId: updateEncounter
+      tags: [encounters]
+      summary: Update an encounter
+      parameters:
+        - name: encounterId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEncounterRequest"
+      responses:
+        "200":
+          description: Encounter updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Encounter"
+
+  /encounters/{encounterId}/sync:
+    post:
+      operationId: syncEncounter
+      tags: [encounters]
+      summary: Sync an offline encounter with cryptographic timestamp
+      parameters:
+        - name: encounterId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncEncounterRequest"
+      responses:
+        "200":
+          description: Encounter synced
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Encounter"
+
+  # ─── CLAIMS ──────────────────────────────────────────────────────────────────
+  /claims:
+    get:
+      operationId: listClaims
+      tags: [claims]
+      summary: List claims
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, scrubbing, clean, submitted, denied, paid, appealed]
+        - name: payerType
+          in: query
+          schema:
+            type: string
+            enum: [medi_cal, medicare, managed_care, private]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of claims
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaimListResponse"
+
+  /claims/{claimId}:
+    get:
+      operationId: getClaim
+      tags: [claims]
+      summary: Get claim by ID
+      parameters:
+        - name: claimId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Claim found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Claim"
+
+  /claims/{claimId}/scrub:
+    post:
+      operationId: scrubClaim
+      tags: [claims]
+      summary: Run pre-claim denial scrubbing
+      parameters:
+        - name: claimId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Scrub results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScrubResult"
+
+  /claims/{claimId}/submit:
+    post:
+      operationId: submitClaim
+      tags: [claims]
+      summary: Submit a clean claim to clearinghouse
+      parameters:
+        - name: claimId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Claim submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Claim"
+
+  /claims/generate:
+    post:
+      operationId: generateClaim
+      tags: [claims]
+      summary: Generate a claim from an encounter
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateClaimRequest"
+      responses:
+        "201":
+          description: Claim generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Claim"
+
+  # ─── CHW TIME TRACKING ───────────────────────────────────────────────────────
+  /chw/sessions:
+    get:
+      operationId: listChwSessions
+      tags: [chw]
+      summary: List CHW time-tracking sessions
+      parameters:
+        - name: workerId
+          in: query
+          schema:
+            type: integer
+        - name: patientId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of CHW sessions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChwSessionListResponse"
+    post:
+      operationId: createChwSession
+      tags: [chw]
+      summary: Start a CHW session timer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateChwSessionRequest"
+      responses:
+        "201":
+          description: Session started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChwSession"
+
+  /chw/sessions/{sessionId}:
+    get:
+      operationId: getChwSession
+      tags: [chw]
+      summary: Get CHW session
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: CHW session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChwSession"
+    put:
+      operationId: updateChwSession
+      tags: [chw]
+      summary: Update CHW session (stop timer, add notes)
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateChwSessionRequest"
+      responses:
+        "200":
+          description: Session updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChwSession"
+
+  /chw/sessions/{sessionId}/bill:
+    post:
+      operationId: billChwSession
+      tags: [chw]
+      summary: Convert CHW session time to billable CPT codes
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Billing codes generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChwBillingResult"
+
+  # ─── PAYER RULES ENGINE ──────────────────────────────────────────────────────
+  /payer-rules/route:
+    post:
+      operationId: routeClaim
+      tags: [payer-rules]
+      summary: Route a claim based on patient payer coverage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RouteClaimRequest"
+      responses:
+        "200":
+          description: Routing decision and requirements
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RouteClaimResult"
+
+  /payer-rules/ecm-status/{patientId}:
+    get:
+      operationId: getEcmStatus
+      tags: [payer-rules]
+      summary: Get Enhanced Care Management (ECM) PMPM status for a Medi-Cal patient
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: ECM status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EcmStatus"
+
+  # ─── SDOH Z-CODE EXTRACTOR ───────────────────────────────────────────────────
+  /sdoh/extract:
+    post:
+      operationId: extractSdohCodes
+      tags: [sdoh]
+      summary: Extract SDOH Z-codes from encounter notes via NLP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SdohExtractRequest"
+      responses:
+        "200":
+          description: Suggested Z-codes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SdohExtractResult"
+
+  # ─── ATHENAHEALTH INTEGRATION ────────────────────────────────────────────────
+  /athena/sync:
+    post:
+      operationId: syncToAthena
+      tags: [athena]
+      summary: Push local encounters to Athenahealth EHR
+      description: >
+        Accepts one or more local encounter IDs and pushes them to Athenahealth.
+        Creates the patient in Athenahealth first if they do not yet have an
+        athenaPatientId. The Digital Receipt (GPS + timestamp) is prepended to
+        the ClinicalNote field. Returns a per-record result array.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AthenaSyncRequest"
+      responses:
+        "200":
+          description: Sync results per encounter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AthenaSyncResponse"
+        "400":
+          description: Invalid request body
+
+  # ─── ADT INTEGRATION ─────────────────────────────────────────────────────────
+  /adt/status/{patientId}:
+    get:
+      operationId: getAdtStatus
+      tags: [adt]
+      summary: Check ADT inpatient status for a patient
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: ADT status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdtStatus"
+
+  # ─── ELIGIBILITY ─────────────────────────────────────────────────────────────
+  /eligibility/aevs:
+    post:
+      operationId: aevsLookup
+      tags: [eligibility]
+      summary: Look up Medi-Cal eligibility via AEVS (X12 270/271)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AevsLookupRequest"
+      responses:
+        "200":
+          description: Eligibility found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AevsLookupResponse"
+        "422":
+          description: Patient not found or invalid lookup
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ─── DASHBOARD ───────────────────────────────────────────────────────────────
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [claims]
+      summary: Get billing dashboard summary metrics
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  /dashboard/revenue-lift:
+    get:
+      operationId: getRevenueLift
+      tags: [claims]
+      summary: Get Revenue Lift comparison (POS 11 Baseline vs POS 27 + Z-Codes StreetClaim, 40% denial recovery)
+      responses:
+        "200":
+          description: Revenue lift analysis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevenueLiftResponse"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    # ─── PATIENT SCHEMAS ───────────────────────────────────────────────────────
+    Patient:
+      type: object
+      properties:
+        id:
+          type: integer
+        firstName:
+          type: string
+        lastName:
+          type: string
+        dateOfBirth:
+          type: string
+          format: date
+        mrn:
+          type: string
+        medicaidId:
+          type: string
+        medicareId:
+          type: string
+        managedCarePlanId:
+          type: string
+        payerType:
+          type: string
+          enum: [medi_cal, medicare, managed_care, private, uninsured]
+        housingStatus:
+          type: string
+          enum: [unsheltered, sheltered_homeless, at_risk, housed]
+        qrCodeWallet:
+          type: string
+        adtStatus:
+          type: string
+          enum: [outpatient, inpatient, discharged, unknown]
+        ecmEnrolled:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        athenaPatientId:
+          type: string
+          description: Athenahealth patient ID after successful EHR sync
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - firstName
+        - lastName
+        - dateOfBirth
+        - mrn
+        - payerType
+        - housingStatus
+        - adtStatus
+        - ecmEnrolled
+        - createdAt
+        - updatedAt
+
+    CreatePatientRequest:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        dateOfBirth:
+          type: string
+          format: date
+        medicaidId:
+          type: string
+        medicareId:
+          type: string
+        managedCarePlanId:
+          type: string
+        payerType:
+          type: string
+          enum: [medi_cal, medicare, managed_care, private, uninsured]
+        housingStatus:
+          type: string
+          enum: [unsheltered, sheltered_homeless, at_risk, housed]
+        ecmEnrolled:
+          type: boolean
+      required:
+        - firstName
+        - lastName
+        - dateOfBirth
+        - payerType
+        - housingStatus
+
+    UpdatePatientRequest:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        medicaidId:
+          type: string
+        medicareId:
+          type: string
+        managedCarePlanId:
+          type: string
+        payerType:
+          type: string
+          enum: [medi_cal, medicare, managed_care, private, uninsured]
+        housingStatus:
+          type: string
+          enum: [unsheltered, sheltered_homeless, at_risk, housed]
+        adtStatus:
+          type: string
+          enum: [outpatient, inpatient, discharged, unknown]
+        ecmEnrolled:
+          type: boolean
+
+    PatientListResponse:
+      type: object
+      properties:
+        patients:
+          type: array
+          items:
+            $ref: "#/components/schemas/Patient"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required: [patients, total, page, limit]
+
+    # ─── ENCOUNTER SCHEMAS ─────────────────────────────────────────────────────
+    Encounter:
+      type: object
+      properties:
+        id:
+          type: integer
+        patientId:
+          type: integer
+        providerId:
+          type: integer
+        encounterDate:
+          type: string
+          format: date-time
+        posCode:
+          type: string
+          default: "27"
+        emCode:
+          type: string
+          enum: [99211, 99212, 99213, 99214, 99215]
+        diagnosisCodes:
+          type: array
+          items:
+            type: string
+        sdohZCodes:
+          type: array
+          items:
+            type: string
+        clinicalNotes:
+          type: string
+        locationDescription:
+          type: string
+        status:
+          type: string
+          enum: [draft, pending_review, submitted, denied, paid]
+        isOfflineCapture:
+          type: boolean
+        offlineTimestamp:
+          type: string
+          format: date-time
+        syncTimestamp:
+          type: string
+          format: date-time
+        cryptoHash:
+          type: string
+        payerType:
+          type: string
+          enum: [medi_cal, medicare, managed_care, private, uninsured]
+        reimbursementRate:
+          type: string
+          enum: [facility, non_facility]
+        estimatedReimbursement:
+          type: number
+        claimId:
+          type: integer
+        athenaEncounterId:
+          type: string
+          description: Athenahealth encounter ID after successful EHR sync
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - patientId
+        - encounterDate
+        - posCode
+        - emCode
+        - diagnosisCodes
+        - sdohZCodes
+        - status
+        - isOfflineCapture
+        - payerType
+        - reimbursementRate
+        - createdAt
+        - updatedAt
+
+    CreateEncounterRequest:
+      type: object
+      properties:
+        patientId:
+          type: integer
+        encounterDate:
+          type: string
+          format: date-time
+        posCode:
+          type: string
+          default: "27"
+        emCode:
+          type: string
+          enum: [99211, 99212, 99213, 99214, 99215]
+        diagnosisCodes:
+          type: array
+          items:
+            type: string
+        clinicalNotes:
+          type: string
+        locationDescription:
+          type: string
+        isOfflineCapture:
+          type: boolean
+          default: false
+        offlineTimestamp:
+          type: string
+          format: date-time
+        payerType:
+          type: string
+          enum: [medi_cal, medicare, managed_care, private, uninsured]
+      required:
+        - patientId
+        - encounterDate
+        - emCode
+        - payerType
+
+    UpdateEncounterRequest:
+      type: object
+      properties:
+        posCode:
+          type: string
+        emCode:
+          type: string
+          enum: [99211, 99212, 99213, 99214, 99215]
+        diagnosisCodes:
+          type: array
+          items:
+            type: string
+        sdohZCodes:
+          type: array
+          items:
+            type: string
+        clinicalNotes:
+          type: string
+        locationDescription:
+          type: string
+        status:
+          type: string
+          enum: [draft, pending_review, submitted, denied, paid]
+
+    SyncEncounterRequest:
+      type: object
+      properties:
+        offlineData:
+          type: object
+          additionalProperties: true
+        deviceId:
+          type: string
+        localTimestamp:
+          type: string
+          format: date-time
+      required: [localTimestamp]
+
+    EncounterListResponse:
+      type: object
+      properties:
+        encounters:
+          type: array
+          items:
+            $ref: "#/components/schemas/Encounter"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required: [encounters, total, page, limit]
+
+    # ─── CLAIM SCHEMAS ─────────────────────────────────────────────────────────
+    Claim:
+      type: object
+      properties:
+        id:
+          type: integer
+        encounterId:
+          type: integer
+        patientId:
+          type: integer
+        claimNumber:
+          type: string
+        payerType:
+          type: string
+          enum: [medi_cal, medicare, managed_care, private]
+        payerName:
+          type: string
+        posCode:
+          type: string
+        emCode:
+          type: string
+        diagnosisCodes:
+          type: array
+          items:
+            type: string
+        sdohZCodes:
+          type: array
+          items:
+            type: string
+        additionalCptCodes:
+          type: array
+          items:
+            type: string
+        billedAmount:
+          type: number
+        allowedAmount:
+          type: number
+        status:
+          type: string
+          enum: [draft, scrubbing, clean, submitted, denied, paid, appealed]
+        denialReason:
+          type: string
+        scrubErrors:
+          type: array
+          items:
+            type: string
+        scrubWarnings:
+          type: array
+          items:
+            type: string
+        submittedAt:
+          type: string
+          format: date-time
+        paidAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - encounterId
+        - patientId
+        - claimNumber
+        - payerType
+        - posCode
+        - emCode
+        - diagnosisCodes
+        - sdohZCodes
+        - additionalCptCodes
+        - billedAmount
+        - status
+        - scrubErrors
+        - scrubWarnings
+        - createdAt
+        - updatedAt
+
+    GenerateClaimRequest:
+      type: object
+      properties:
+        encounterId:
+          type: integer
+      required: [encounterId]
+
+    ScrubResult:
+      type: object
+      properties:
+        claimId:
+          type: integer
+        passed:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+        adtConflict:
+          type: boolean
+        adtConflictDetail:
+          type: string
+        incompatibleCodes:
+          type: array
+          items:
+            type: string
+        estimatedReimbursement:
+          type: number
+      required: [claimId, passed, errors, warnings, adtConflict, incompatibleCodes]
+
+    ClaimListResponse:
+      type: object
+      properties:
+        claims:
+          type: array
+          items:
+            $ref: "#/components/schemas/Claim"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required: [claims, total, page, limit]
+
+    # ─── CHW SCHEMAS ───────────────────────────────────────────────────────────
+    ChwSession:
+      type: object
+      properties:
+        id:
+          type: integer
+        workerId:
+          type: integer
+        workerName:
+          type: string
+        workerType:
+          type: string
+          enum: [chw, peer_navigator, care_coordinator]
+        patientId:
+          type: integer
+        serviceType:
+          type: string
+          enum: [outreach, housing_navigation, care_coordination, health_education, ecm_support]
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        durationMinutes:
+          type: integer
+        notes:
+          type: string
+        status:
+          type: string
+          enum: [active, completed, billed]
+        generatedCptCodes:
+          type: array
+          items:
+            type: string
+        calaimService:
+          type: string
+        billedAmount:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - workerId
+        - workerName
+        - workerType
+        - patientId
+        - serviceType
+        - startTime
+        - status
+        - generatedCptCodes
+        - createdAt
+
+    CreateChwSessionRequest:
+      type: object
+      properties:
+        workerId:
+          type: integer
+        workerName:
+          type: string
+        workerType:
+          type: string
+          enum: [chw, peer_navigator, care_coordinator]
+        patientId:
+          type: integer
+        serviceType:
+          type: string
+          enum: [outreach, housing_navigation, care_coordination, health_education, ecm_support]
+        notes:
+          type: string
+      required: [workerId, workerName, workerType, patientId, serviceType]
+
+    UpdateChwSessionRequest:
+      type: object
+      properties:
+        endTime:
+          type: string
+          format: date-time
+        notes:
+          type: string
+        status:
+          type: string
+          enum: [active, completed, billed]
+
+    ChwBillingResult:
+      type: object
+      properties:
+        sessionId:
+          type: integer
+        durationMinutes:
+          type: integer
+        cptCodes:
+          type: array
+          items:
+            type: string
+        calaimService:
+          type: string
+        estimatedReimbursement:
+          type: number
+        billingNotes:
+          type: string
+      required: [sessionId, durationMinutes, cptCodes, estimatedReimbursement]
+
+    ChwSessionListResponse:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChwSession"
+        total:
+          type: integer
+      required: [sessions, total]
+
+    # ─── PAYER RULES SCHEMAS ───────────────────────────────────────────────────
+    RouteClaimRequest:
+      type: object
+      properties:
+        patientId:
+          type: integer
+        encounterId:
+          type: integer
+        payerType:
+          type: string
+          enum: [medi_cal, medicare, managed_care, private, uninsured]
+      required: [patientId, payerType]
+
+    RouteClaimResult:
+      type: object
+      properties:
+        patientId:
+          type: integer
+        payerType:
+          type: string
+        routingDecision:
+          type: string
+          enum: [fee_for_service, capitated_pmpm, value_based, direct_invoice]
+        specialProgram:
+          type: string
+          enum: [ecm, calaim_community_supports, primary_care_first, access_model, none]
+        requiredGCodes:
+          type: array
+          items:
+            type: string
+        pmpmRequirements:
+          type: object
+          properties:
+            monthlyTouchesRequired:
+              type: integer
+            monthlyTouchesCompleted:
+              type: integer
+            pmpmAmount:
+              type: number
+        billingNotes:
+          type: string
+        estimatedReimbursement:
+          type: number
+      required: [patientId, payerType, routingDecision, specialProgram, requiredGCodes]
+
+    EcmStatus:
+      type: object
+      properties:
+        patientId:
+          type: integer
+        enrolled:
+          type: boolean
+        monthlyTouchesRequired:
+          type: integer
+        monthlyTouchesCompleted:
+          type: integer
+        pmpmRate:
+          type: number
+        lastTouchDate:
+          type: string
+          format: date-time
+        nextTouchDue:
+          type: string
+          format: date-time
+        eligible:
+          type: boolean
+      required: [patientId, enrolled, monthlyTouchesRequired, monthlyTouchesCompleted, eligible]
+
+    # ─── SDOH SCHEMAS ──────────────────────────────────────────────────────────
+    SdohExtractRequest:
+      type: object
+      properties:
+        encounterId:
+          type: integer
+        clinicalNotes:
+          type: string
+      required: [clinicalNotes]
+
+    SdohCode:
+      type: object
+      properties:
+        code:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+          enum: [housing, food, transportation, education, employment, social_support, financial]
+        confidence:
+          type: number
+      required: [code, description, category, confidence]
+
+    SdohExtractResult:
+      type: object
+      properties:
+        encounterId:
+          type: integer
+        suggestedCodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SdohCode"
+        extractedKeywords:
+          type: array
+          items:
+            type: string
+        medicalNecessityScore:
+          type: number
+        medicalNecessityJustification:
+          type: string
+      required: [suggestedCodes, extractedKeywords, medicalNecessityScore]
+
+    # ─── ADT SCHEMAS ───────────────────────────────────────────────────────────
+    AdtStatus:
+      type: object
+      properties:
+        patientId:
+          type: integer
+        currentStatus:
+          type: string
+          enum: [outpatient, inpatient, discharged, unknown]
+        admittedAt:
+          type: string
+          format: date-time
+        dischargedAt:
+          type: string
+          format: date-time
+        facility:
+          type: string
+        pos21Conflict:
+          type: boolean
+        conflictMessage:
+          type: string
+        lastChecked:
+          type: string
+          format: date-time
+      required: [patientId, currentStatus, pos21Conflict, lastChecked]
+
+    # ─── DASHBOARD SCHEMAS ─────────────────────────────────────────────────────
+    DashboardSummary:
+      type: object
+      properties:
+        totalEncounters:
+          type: integer
+        encountersThisMonth:
+          type: integer
+        totalClaimsSubmitted:
+          type: integer
+        cleanClaimRate:
+          type: number
+        totalBilled:
+          type: number
+        totalCollected:
+          type: number
+        denialRate:
+          type: number
+        avgReimbursement:
+          type: number
+        pendingClaims:
+          type: integer
+        deniedClaims:
+          type: integer
+        pos27Encounters:
+          type: integer
+        nonFacilityRate:
+          type: number
+        activeChwSessions:
+          type: integer
+        ecmPatientsEnrolled:
+          type: integer
+        sdohCodesAppended:
+          type: integer
+        claimsByPayer:
+          type: array
+          items:
+            type: object
+            properties:
+              payerType:
+                type: string
+              count:
+                type: integer
+              totalBilled:
+                type: number
+              totalCollected:
+                type: number
+            required: [payerType, count, totalBilled, totalCollected]
+        recentDenials:
+          type: array
+          items:
+            type: object
+            properties:
+              claimId:
+                type: integer
+              patientName:
+                type: string
+              denialReason:
+                type: string
+              amount:
+                type: number
+            required: [claimId, denialReason, amount]
+      required:
+        - totalEncounters
+        - encountersThisMonth
+        - totalClaimsSubmitted
+        - cleanClaimRate
+        - totalBilled
+        - totalCollected
+        - denialRate
+        - avgReimbursement
+        - pendingClaims
+        - deniedClaims
+        - pos27Encounters
+        - nonFacilityRate
+        - activeChwSessions
+        - ecmPatientsEnrolled
+        - sdohCodesAppended
+        - claimsByPayer
+        - recentDenials
+
+    # ─── REVENUE LIFT SCHEMAS ───────────────────────────────────────────────────
+    RevenueBilledCollected:
+      type: object
+      properties:
+        billed:
+          type: number
+        collected:
+          type: number
+      required: [billed, collected]
+
+    RevenueLiftByPayer:
+      type: object
+      properties:
+        payerType:
+          type: string
+        baselineRevenue:
+          $ref: "#/components/schemas/RevenueBilledCollected"
+        streetclaimRevenue:
+          type: object
+          properties:
+            billed:
+              type: number
+            collected:
+              type: number
+            zCodeClaims:
+              type: integer
+          required: [billed, collected, zCodeClaims]
+        lift:
+          type: number
+        liftPercent:
+          type: number
+        claimCount:
+          type: integer
+      required: [payerType, baselineRevenue, streetclaimRevenue, lift, liftPercent, claimCount]
+
+    RevenueLiftSegmentation:
+      type: object
+      properties:
+        baseline:
+          type: object
+          properties:
+            posCode:
+              type: string
+            totalBilled:
+              type: number
+            totalCollected:
+              type: number
+          required: [posCode, totalBilled, totalCollected]
+        streetclaim:
+          type: object
+          properties:
+            posCode:
+              type: string
+            totalBilled:
+              type: number
+            totalCollected:
+              type: number
+            claimsWithZCodes:
+              type: integer
+          required: [posCode, totalBilled, totalCollected, claimsWithZCodes]
+      required: [baseline, streetclaim]
+
+    RevenueLiftResponse:
+      type: object
+      properties:
+        baselineRevenue:
+          type: number
+          description: Total billed revenue under POS 11 (office-based baseline)
+        streetclaimRevenue:
+          type: number
+          description: Total billed revenue under POS 27 + SDOH Z-codes (StreetClaim model)
+        lift:
+          type: number
+          description: "(streetclaimRevenue - baselineRevenue) * 40% denial recovery"
+        liftPercent:
+          type: number
+          description: Lift as a percentage of baseline revenue
+        denialRecoveryRate:
+          type: number
+          description: The denial recovery multiplier applied (0.40)
+        totalClaims:
+          type: integer
+        claimsWithZCodes:
+          type: integer
+        segmentation:
+          $ref: "#/components/schemas/RevenueLiftSegmentation"
+        byPayer:
+          type: array
+          items:
+            $ref: "#/components/schemas/RevenueLiftByPayer"
+      required:
+        - baselineRevenue
+        - streetclaimRevenue
+        - lift
+        - liftPercent
+        - denialRecoveryRate
+        - totalClaims
+        - claimsWithZCodes
+        - segmentation
+        - byPayer
+
+    # ─── ELIGIBILITY SCHEMAS ───────────────────────────────────────────────────
+    AevsLookupRequest:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        dateOfBirth:
+          type: string
+          format: date
+      required: [firstName, lastName, dateOfBirth]
+
+    AevsLookupResponse:
+      type: object
+      properties:
+        cin:
+          type: string
+          description: Medi-Cal Client Index Number
+        managedCarePlan:
+          type: string
+          description: Managed Care Plan name
+        eligibilityStatus:
+          type: string
+          enum: [active, inactive, pending, unknown]
+        lookupDate:
+          type: string
+          format: date-time
+        isStub:
+          type: boolean
+          description: True when returned from development stub (no live AEVS credentials)
+      required: [cin, eligibilityStatus, lookupDate]
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: string
+      required: [error, message]
+
+    # ─── ATHENA SCHEMAS ─────────────────────────────────────────────────────────
+    AthenaSyncRequest:
+      type: object
+      properties:
+        encounterIds:
+          type: array
+          items:
+            type: string
+          description: Local encounter IDs to push to Athenahealth
+          minItems: 1
+      required: [encounterIds]
+
+    AthenaSyncResultItem:
+      type: object
+      properties:
+        encounterId:
+          type: string
+        status:
+          type: string
+          enum: [synced, error]
+        athenaEncounterId:
+          type: string
+          description: Athenahealth encounter ID (present when status is synced)
+        error:
+          type: string
+          description: Error message from Athenahealth (present when status is error)
+      required: [encounterId, status]
+
+    AthenaSyncResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/AthenaSyncResultItem"
+      required: [results]

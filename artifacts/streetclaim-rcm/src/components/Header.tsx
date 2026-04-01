@@ -1,0 +1,109 @@
+import { useEffect, useState } from "react";
+import { Link, useLocation } from "wouter";
+import { Wifi, WifiOff, Map, BarChart2, Home, Menu, X } from "lucide-react";
+
+const NAV_LINKS = [
+  { href: "/", label: "Dashboard", icon: <Home className="w-3.5 h-3.5" /> },
+  { href: "/field-map", label: "Director Map", icon: <Map className="w-3.5 h-3.5" /> },
+  { href: "/revenue-lift", label: "Revenue Lift", icon: <BarChart2 className="w-3.5 h-3.5" /> },
+];
+
+export function Header() {
+  const [online, setOnline] = useState(navigator.onLine);
+  const [location] = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const handleOnline = () => setOnline(true);
+    const handleOffline = () => setOnline(false);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  useEffect(() => { setMenuOpen(false); }, [location]);
+
+  return (
+    <header className="sticky top-0 z-50 bg-blue-700 text-white shadow-md">
+      <div className="flex items-center justify-between px-4 py-2.5 gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Link href="/">
+            <span className="font-bold text-base tracking-tight cursor-pointer select-none">
+              StreetClaim <span className="text-blue-200">RCM</span>
+            </span>
+          </Link>
+        </div>
+
+        {/* Desktop nav */}
+        <nav className="hidden sm:flex items-center gap-0.5">
+          {NAV_LINKS.map((link) => {
+            const active = location === link.href;
+            return (
+              <Link key={link.href} href={link.href}>
+                <button
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    active ? "bg-white/20 text-white" : "text-blue-100 hover:bg-white/10 hover:text-white"
+                  }`}
+                >
+                  {link.icon}
+                  {link.label}
+                  {link.href === "/field-map" && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  )}
+                </button>
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            {online ? (
+              <>
+                <Wifi className="w-3.5 h-3.5 text-green-300" />
+                <span className="text-xs text-green-300 font-medium hidden sm:block">Online</span>
+              </>
+            ) : (
+              <>
+                <WifiOff className="w-3.5 h-3.5 text-red-300" />
+                <span className="text-xs text-red-300 font-medium hidden sm:block">Offline</span>
+              </>
+            )}
+          </div>
+          <button
+            className="sm:hidden p-1.5 rounded-lg hover:bg-blue-600 transition-colors"
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
+            {menuOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+          </button>
+        </div>
+      </div>
+
+      {menuOpen && (
+        <div className="sm:hidden border-t border-blue-600 bg-blue-800 px-2 py-2 space-y-0.5">
+          {NAV_LINKS.map((link) => {
+            const active = location === link.href;
+            return (
+              <Link key={link.href} href={link.href}>
+                <button
+                  className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                    active ? "bg-white/20 text-white" : "text-blue-100 hover:bg-white/10"
+                  }`}
+                >
+                  {link.icon}
+                  {link.label}
+                  {link.href === "/field-map" && (
+                    <span className="ml-auto w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  )}
+                </button>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </header>
+  );
+}
