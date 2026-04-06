@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
-import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
+import { useMemo, useState, useEffect } from "react";
+import { useSearch } from "wouter";
+import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from "react-leaflet";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
   ResponsiveContainer, Cell, PieChart, Pie, Legend,
@@ -82,8 +83,8 @@ function normalize(arr: number[]) {
 function computeScores(data: typeof RAW_DATA) {
   const rates    = normalize(data.map(d => d.rate));
   const homeless = normalize(data.map(d => d.homeless));
-  const svcGap   = data.map(d => d.serviceGap); // already 0-1, higher = bigger gap
-  const substUse = normalize(data.map(d => d.rate * 0.7 + d.homeless * 0.003)); // proxy
+  const svcGap   = data.map(d => d.serviceGap);
+  const substUse = normalize(data.map(d => d.rate * 0.7 + d.homeless * 0.003));
 
   return data.map((d, i) => ({
     ...d,
@@ -149,11 +150,77 @@ const CustomBarLabel = (props: { x?: number; y?: number; width?: number; value?:
   );
 };
 
+// ─────────────────────────────────────────────────────────
+// MapFlyTo — child of MapContainer, flies map to focused community
+// ─────────────────────────────────────────────────────────
+function MapFlyTo({ lat, lon }: { lat: number; lon: number }) {
+  const map = useMap();
+  useEffect(() => {
+    map.flyTo([lat, lon], 13, { duration: 1.4 });
+  }, [map, lat, lon]);
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────
+// CopyLinkButton — copies deep-link URL to clipboard
+// ─────────────────────────────────────────────────────────
+function CopyLinkButton({ communityId }: { communityId: string }) {
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    const url = `${window.location.origin}/hrvm?focus=${communityId}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <button
+      onClick={handleCopy}
+      title={`Copy link for ${communityId}`}
+      className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border transition-colors ${
+        copied
+          ? "bg-green-100 border-green-300 text-green-700"
+          : "bg-white border-gray-200 text-gray-500 hover:border-blue-300 hover:text-blue-600"
+      }`}
+    >
+      {copied ? (
+        <>
+          <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+          </svg>
+          Copied!
+        </>
+      ) : (
+        <>
+          <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/>
+          </svg>
+          Copy link
+        </>
+      )}
+    </button>
+  );
+}
+
 export default function HRVMOptimizerPage() {
-  const [activeTab, setActiveTab] = useState<"map" | "charts" | "scores">("map");
+  const search = useSearch();
+  const focusId = new URLSearchParams(search).get("focus") ?? null;
+
   const scored = useMemo(() => computeScores(RAW_DATA), []);
   const sorted = useMemo(() => [...scored].sort((a, b) => b.recScore - a.recScore), [scored]);
   const top15  = useMemo(() => [...scored].sort((a, b) => b.rate - a.rate).slice(0, 15), [scored]);
+
+  // If a focus param is present, default to map tab
+  const [activeTab, setActiveTab] = useState<"map" | "charts" | "scores">(
+    focusId ? "map" : "map"
+  );
+
+  const focusCommunity = useMemo(
+    () => scored.find(d => d.id === focusId) ?? null,
+    [scored, focusId]
+  );
 
   const pieData = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -192,6 +259,30 @@ export default function HRVMOptimizerPage() {
             population density and service-gap index to produce a weighted HRVM placement score.
           </p>
         </div>
+
+        {/* Focus Banner — shown when ?focus= is set */}
+        {focusCommunity && (
+          <div className="rounded-lg border-2 border-blue-400 bg-blue-50 px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold text-blue-400 uppercase tracking-wide">
+                  Focused View — City Partner Link
+                </p>
+                <p className="text-xl font-bold text-blue-900">{focusCommunity.name}</p>
+                <p className="text-sm text-blue-700 mt-0.5">
+                  Mortality: <strong>{focusCommunity.rate}</strong>/100k ·
+                  Risk: <strong>{riskCat(focusCommunity.rate)}</strong> ·
+                  Homeless est.: <strong>{focusCommunity.homeless.toLocaleString()}</strong> ·
+                  HRVM Score: <strong>{focusCommunity.recScore}/100</strong>
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-blue-500">Share this view:</span>
+                <CopyLinkButton communityId={focusCommunity.id} />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Best Recommendation Banner */}
         <Card className="border-2 border-red-500 bg-red-50">
@@ -257,7 +348,14 @@ export default function HRVMOptimizerPage() {
         {activeTab === "map" && (
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Drug Overdose Mortality Heat Map — LA County</CardTitle>
+              <CardTitle className="text-base">
+                Drug Overdose Mortality Heat Map — LA County
+                {focusCommunity && (
+                  <span className="ml-2 text-sm font-normal text-blue-600">
+                    · Focused on {focusCommunity.name}
+                  </span>
+                )}
+              </CardTitle>
               <CardDescription>
                 Circle size and colour intensity represent mortality rate. Darker red = higher overdose deaths per 100k.
                 Hover any circle for details.
@@ -266,39 +364,45 @@ export default function HRVMOptimizerPage() {
             <CardContent className="p-0">
               <div className="h-[520px] rounded-b-lg overflow-hidden">
                 <MapContainer
-                  center={[34.05, -118.25]}
-                  zoom={10}
+                  center={focusCommunity ? [focusCommunity.lat, focusCommunity.lon] : [34.05, -118.25]}
+                  zoom={focusCommunity ? 13 : 10}
                   style={{ height: "100%", width: "100%" }}
                 >
                   <TileLayer
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                     attribution='&copy; OpenStreetMap contributors'
                   />
-                  {scored.map(d => (
-                    <CircleMarker
-                      key={d.id}
-                      center={[d.lat, d.lon]}
-                      radius={rateRadius(d.rate)}
-                      pathOptions={{
-                        fillColor: rateColor(d.rate),
-                        color: rateColor(d.rate),
-                        fillOpacity: 0.70,
-                        weight: 1.5,
-                      }}
-                    >
-                      <Tooltip>
-                        <div className="text-xs space-y-0.5 min-w-[180px]">
-                          <p className="font-bold text-sm">{d.name}</p>
-                          <p>Mortality: <strong>{d.rate}</strong> per 100k</p>
-                          <p>Risk: <strong>{riskCat(d.rate)}</strong></p>
-                          <p>Homeless est.: <strong>{d.homeless}</strong></p>
-                          <p className="pt-1 border-t border-gray-200">
-                            HRVM Score: <strong>{d.recScore}/100</strong>
-                          </p>
-                        </div>
-                      </Tooltip>
-                    </CircleMarker>
-                  ))}
+                  {focusCommunity && (
+                    <MapFlyTo lat={focusCommunity.lat} lon={focusCommunity.lon} />
+                  )}
+                  {scored.map(d => {
+                    const isFocused = d.id === focusId;
+                    return (
+                      <CircleMarker
+                        key={d.id}
+                        center={[d.lat, d.lon]}
+                        radius={isFocused ? rateRadius(d.rate) + 4 : rateRadius(d.rate)}
+                        pathOptions={{
+                          fillColor: rateColor(d.rate),
+                          color: isFocused ? "#1d4ed8" : rateColor(d.rate),
+                          fillOpacity: isFocused ? 0.85 : 0.70,
+                          weight: isFocused ? 3 : 1.5,
+                        }}
+                      >
+                        <Tooltip permanent={isFocused}>
+                          <div className="text-xs space-y-0.5 min-w-[180px]">
+                            <p className="font-bold text-sm">{d.name}</p>
+                            <p>Mortality: <strong>{d.rate}</strong> per 100k</p>
+                            <p>Risk: <strong>{riskCat(d.rate)}</strong></p>
+                            <p>Homeless est.: <strong>{d.homeless}</strong></p>
+                            <p className="pt-1 border-t border-gray-200">
+                              HRVM Score: <strong>{d.recScore}/100</strong>
+                            </p>
+                          </div>
+                        </Tooltip>
+                      </CircleMarker>
+                    );
+                  })}
                 </MapContainer>
               </div>
 
@@ -318,6 +422,12 @@ export default function HRVMOptimizerPage() {
                     {l.label}
                   </span>
                 ))}
+                {focusCommunity && (
+                  <span className="ml-auto flex items-center gap-1.5 text-blue-600">
+                    <span className="w-3 h-3 rounded-full inline-block border-2 border-blue-600" style={{ background: rateColor(focusCommunity.rate) }} />
+                    Blue border = focused community
+                  </span>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -384,7 +494,7 @@ export default function HRVMOptimizerPage() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Top 15 — Highest Overdose Mortality</CardTitle>
-                <CardDescription>Deaths per 100,000 population (2018–2022). Colour = HRVM recommendation score.</CardDescription>
+                <CardDescription>Deaths per 100,000 population (2018–2022).</CardDescription>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={360}>
@@ -412,9 +522,12 @@ export default function HRVMOptimizerPage() {
                         "Mortality rate",
                       ]}
                     />
-                    <Bar dataKey="rate" radius={[0, 4, 4, 0]} label={<CustomBarLabel />}>
+                    <Bar dataKey="rate" radius={[0, 3, 3, 0]} label={<CustomBarLabel />}>
                       {top15.map(d => (
-                        <Cell key={d.id} fill={rateColor(d.rate)} />
+                        <Cell
+                          key={d.id}
+                          fill={d.id === focusId ? "#1d4ed8" : rateColor(d.rate)}
+                        />
                       ))}
                     </Bar>
                   </BarChart>
@@ -432,6 +545,7 @@ export default function HRVMOptimizerPage() {
               <CardDescription>
                 All {sorted.length} communities ranked by weighted recommendation score.
                 Score = 40% mortality + 30% homeless density + 20% service gap + 10% substance contacts.
+                Use "Copy link" to share a focused map view with a city partner.
               </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
@@ -446,18 +560,31 @@ export default function HRVMOptimizerPage() {
                       <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Risk</th>
                       <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Homeless</th>
                       <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">HRVM Score</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Partner Link</th>
                     </tr>
                   </thead>
                   <tbody>
                     {sorted.map((d, i) => {
                       const cat = riskCat(d.rate);
+                      const isFocused = d.id === focusId;
                       return (
                         <tr
                           key={d.id}
-                          className={`border-b border-gray-100 hover:bg-gray-50 ${i === 0 ? "bg-red-50" : ""}`}
+                          className={`border-b border-gray-100 hover:bg-gray-50 ${
+                            isFocused
+                              ? "bg-blue-50 ring-1 ring-inset ring-blue-200"
+                              : i === 0
+                              ? "bg-red-50"
+                              : ""
+                          }`}
                         >
                           <td className="px-4 py-2.5 text-xs font-bold text-gray-400">{i + 1}</td>
-                          <td className="px-4 py-2.5 font-medium text-gray-800 whitespace-nowrap">{d.name}</td>
+                          <td className="px-4 py-2.5 font-medium text-gray-800 whitespace-nowrap">
+                            {isFocused && (
+                              <span className="mr-1.5 inline-block w-1.5 h-1.5 rounded-full bg-blue-500 align-middle" />
+                            )}
+                            {d.name}
+                          </td>
                           <td className="px-4 py-2.5">
                             <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${
                               d.type === "uninc"
@@ -492,6 +619,9 @@ export default function HRVMOptimizerPage() {
                             >
                               {d.recScore}
                             </span>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <CopyLinkButton communityId={d.id} />
                           </td>
                         </tr>
                       );
