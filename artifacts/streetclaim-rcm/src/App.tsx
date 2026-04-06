@@ -10,6 +10,9 @@ import EncounterNew from "@/pages/encounter-new";
 import EncounterDetail from "@/pages/encounter-detail";
 import HPEPage from "@/pages/hpe";
 import FieldMapPage from "@/pages/field-map";
+import PowerBIPage from "@/pages/power-bi";
+import TableauPage from "@/pages/tableau";
+import HRVMOptimizerPage from "@/pages/hrvm-optimizer";
 
 const queryClient = new QueryClient();
 
@@ -24,6 +27,9 @@ function Router() {
         <Route path="/hpe" component={HPEPage} />
         <Route path="/revenue-lift" component={RevenueLiftPage} />
         <Route path="/field-map" component={FieldMapPage} />
+        <Route path="/power-bi" component={PowerBIPage} />
+        <Route path="/tableau" component={TableauPage} />
+        <Route path="/hrvm" component={HRVMOptimizerPage} />
         <Route component={NotFound} />
       </Switch>
     </>

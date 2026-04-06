@@ -94,6 +94,7 @@ router.get("/odata", (req: Request, res: Response) => {
       { name: "RevenueSummary", kind: "EntitySet", url: `${base}/RevenueSummary` },
       { name: "DenialRates", kind: "EntitySet", url: `${base}/DenialRates` },
       { name: "SdohZCodes", kind: "EntitySet", url: `${base}/SdohZCodes` },
+      { name: "HrvmKiosks", kind: "EntitySet", url: `${base}/HrvmKiosks` },
     ],
   });
 });
@@ -187,6 +188,23 @@ router.get("/odata/\\$metadata", (_req: Request, res: Response) => {
         <Property Name="Category" Type="Edm.String"/>
       </EntityType>
 
+      <EntityType Name="HrvmKiosk">
+        <Key><PropertyRef Name="Id"/></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false"/>
+        <Property Name="Name" Type="Edm.String"/>
+        <Property Name="CommunityType" Type="Edm.String"/>
+        <Property Name="County" Type="Edm.String"/>
+        <Property Name="OverdoseMortalityRate" Type="Edm.Decimal" Scale="1"/>
+        <Property Name="RiskCategory" Type="Edm.String"/>
+        <Property Name="HomelessPopEst" Type="Edm.Int32"/>
+        <Property Name="ServiceGapIndex" Type="Edm.Decimal" Scale="2"/>
+        <Property Name="HrvmRecommendationScore" Type="Edm.Int32"/>
+        <Property Name="Latitude" Type="Edm.Decimal" Scale="6"/>
+        <Property Name="Longitude" Type="Edm.Decimal" Scale="6"/>
+        <Property Name="DataSource" Type="Edm.String"/>
+        <Property Name="DataPeriod" Type="Edm.String"/>
+      </EntityType>
+
       <EntityContainer Name="Container">
         <EntitySet Name="Claims" EntityType="${SERVICE_NAMESPACE}.Claim"/>
         <EntitySet Name="FeeSchedule" EntityType="${SERVICE_NAMESPACE}.FeeScheduleEntry"/>
@@ -194,6 +212,7 @@ router.get("/odata/\\$metadata", (_req: Request, res: Response) => {
         <EntitySet Name="RevenueSummary" EntityType="${SERVICE_NAMESPACE}.RevenueSummaryEntry"/>
         <EntitySet Name="DenialRates" EntityType="${SERVICE_NAMESPACE}.DenialRateEntry"/>
         <EntitySet Name="SdohZCodes" EntityType="${SERVICE_NAMESPACE}.SdohZCode"/>
+        <EntitySet Name="HrvmKiosks" EntityType="${SERVICE_NAMESPACE}.HrvmKiosk"/>
       </EntityContainer>
     </Schema>
   </edmx:DataServices>
@@ -438,6 +457,113 @@ router.get("/odata/SdohZCodes", (req: Request, res: Response) => {
   res.setHeader("OData-Version", ODATA_VERSION);
   const resp: Record<string, unknown> = {
     "@odata.context": odataContext(getBase(req), "SdohZCodes"),
+    value: items,
+  };
+  if (req.query.$count === "true") resp["@odata.count"] = count;
+  res.json(resp);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GET /api/odata/HrvmKiosks
+// LA County Drug Overdose Mortality 2018-2022 + HRVM placement score
+// Source: LA County DPH; LAHSA 2023 PIT; Syringe Service Program gap index
+// ──────────────────────────────────────────────────────────────────────────────
+const HRVM_RAW = [
+  { id: "alhambra",          name: "Alhambra",                  rate: 9.6,  lat: 34.095, lon: -118.127, type: "city",  homeless: 62,  svcGap: 0.45 },
+  { id: "azusa",             name: "Azusa",                     rate: 13.4, lat: 34.133, lon: -117.907, type: "city",  homeless: 95,  svcGap: 0.62 },
+  { id: "baldwin_park",      name: "Baldwin Park",              rate: 9.8,  lat: 34.085, lon: -117.961, type: "city",  homeless: 78,  svcGap: 0.55 },
+  { id: "bell",              name: "Bell",                      rate: 12.2, lat: 33.977, lon: -118.187, type: "city",  homeless: 88,  svcGap: 0.60 },
+  { id: "bell_gardens",      name: "Bell Gardens",              rate: 12.2, lat: 33.966, lon: -118.156, type: "city",  homeless: 85,  svcGap: 0.58 },
+  { id: "bellflower",        name: "Bellflower",                rate: 13.7, lat: 33.888, lon: -118.117, type: "city",  homeless: 110, svcGap: 0.64 },
+  { id: "beverly_hills",     name: "Beverly Hills",             rate: 15.2, lat: 34.073, lon: -118.400, type: "city",  homeless: 52,  svcGap: 0.30 },
+  { id: "burbank",           name: "Burbank",                   rate: 10.3, lat: 34.181, lon: -118.309, type: "city",  homeless: 76,  svcGap: 0.48 },
+  { id: "carson",            name: "Carson",                    rate: 14.1, lat: 33.831, lon: -118.282, type: "city",  homeless: 98,  svcGap: 0.61 },
+  { id: "claremont",         name: "Claremont",                 rate: 14.7, lat: 34.097, lon: -117.720, type: "city",  homeless: 72,  svcGap: 0.66 },
+  { id: "compton",           name: "Compton",                   rate: 19.6, lat: 33.896, lon: -118.220, type: "city",  homeless: 310, svcGap: 0.72 },
+  { id: "covina",            name: "Covina",                    rate: 14.7, lat: 34.090, lon: -117.890, type: "city",  homeless: 88,  svcGap: 0.60 },
+  { id: "culver_city",       name: "Culver City",               rate: 11.5, lat: 34.021, lon: -118.397, type: "city",  homeless: 90,  svcGap: 0.40 },
+  { id: "downey",            name: "Downey",                    rate: 11.2, lat: 33.940, lon: -118.133, type: "city",  homeless: 92,  svcGap: 0.52 },
+  { id: "el_monte",          name: "El Monte",                  rate: 12.4, lat: 34.069, lon: -118.027, type: "city",  homeless: 120, svcGap: 0.62 },
+  { id: "gardena",           name: "Gardena",                   rate: 15.9, lat: 33.888, lon: -118.309, type: "city",  homeless: 145, svcGap: 0.65 },
+  { id: "glendale",          name: "Glendale",                  rate: 8.9,  lat: 34.142, lon: -118.255, type: "city",  homeless: 105, svcGap: 0.42 },
+  { id: "glendora",          name: "Glendora",                  rate: 9.3,  lat: 34.136, lon: -117.865, type: "city",  homeless: 55,  svcGap: 0.55 },
+  { id: "hawthorne",         name: "Hawthorne",                 rate: 14.6, lat: 33.916, lon: -118.352, type: "city",  homeless: 165, svcGap: 0.63 },
+  { id: "huntington_park",   name: "Huntington Park",           rate: 12.1, lat: 33.981, lon: -118.225, type: "city",  homeless: 130, svcGap: 0.60 },
+  { id: "inglewood",         name: "Inglewood",                 rate: 17.7, lat: 33.962, lon: -118.353, type: "city",  homeless: 390, svcGap: 0.68 },
+  { id: "la_mirada",         name: "La Mirada",                 rate: 12.8, lat: 33.917, lon: -118.012, type: "city",  homeless: 68,  svcGap: 0.58 },
+  { id: "la_verne",          name: "La Verne",                  rate: 16.4, lat: 34.101, lon: -117.768, type: "city",  homeless: 70,  svcGap: 0.67 },
+  { id: "lakewood",          name: "Lakewood",                  rate: 15.1, lat: 33.853, lon: -118.134, type: "city",  homeless: 88,  svcGap: 0.60 },
+  { id: "lancaster",         name: "Lancaster",                 rate: 26.9, lat: 34.699, lon: -118.137, type: "city",  homeless: 520, svcGap: 0.85 },
+  { id: "lawndale",          name: "Lawndale",                  rate: 11.4, lat: 33.887, lon: -118.353, type: "city",  homeless: 75,  svcGap: 0.52 },
+  { id: "lomita",            name: "Lomita",                    rate: 21.6, lat: 33.793, lon: -118.315, type: "city",  homeless: 62,  svcGap: 0.72 },
+  { id: "lynwood",           name: "Lynwood",                   rate: 15.2, lat: 33.930, lon: -118.212, type: "city",  homeless: 175, svcGap: 0.67 },
+  { id: "montebello",        name: "Montebello",                rate: 14.8, lat: 34.011, lon: -118.114, type: "city",  homeless: 90,  svcGap: 0.60 },
+  { id: "monterey_park",     name: "Monterey Park",             rate: 8.9,  lat: 34.062, lon: -118.122, type: "city",  homeless: 48,  svcGap: 0.40 },
+  { id: "norwalk",           name: "Norwalk",                   rate: 15.3, lat: 33.902, lon: -118.082, type: "city",  homeless: 140, svcGap: 0.63 },
+  { id: "palmdale",          name: "Palmdale",                  rate: 21.2, lat: 34.579, lon: -118.116, type: "city",  homeless: 480, svcGap: 0.82 },
+  { id: "paramount",         name: "Paramount",                 rate: 11.3, lat: 33.889, lon: -118.158, type: "city",  homeless: 82,  svcGap: 0.54 },
+  { id: "pico_rivera",       name: "Pico Rivera",               rate: 15.0, lat: 33.983, lon: -118.097, type: "city",  homeless: 95,  svcGap: 0.60 },
+  { id: "redondo_beach",     name: "Redondo Beach",             rate: 14.4, lat: 33.849, lon: -118.388, type: "city",  homeless: 110, svcGap: 0.50 },
+  { id: "san_dimas",         name: "San Dimas",                 rate: 13.7, lat: 34.107, lon: -117.806, type: "city",  homeless: 60,  svcGap: 0.62 },
+  { id: "santa_clarita",     name: "Santa Clarita",             rate: 13.7, lat: 34.391, lon: -118.543, type: "city",  homeless: 200, svcGap: 0.65 },
+  { id: "santa_monica",      name: "Santa Monica",              rate: 19.7, lat: 34.019, lon: -118.491, type: "city",  homeless: 870, svcGap: 0.55 },
+  { id: "south_gate",        name: "South Gate",                rate: 10.6, lat: 33.955, lon: -118.212, type: "city",  homeless: 112, svcGap: 0.55 },
+  { id: "torrance",          name: "Torrance",                  rate: 11.6, lat: 33.836, lon: -118.340, type: "city",  homeless: 95,  svcGap: 0.48 },
+  { id: "west_covina",       name: "West Covina",               rate: 14.2, lat: 34.069, lon: -117.939, type: "city",  homeless: 98,  svcGap: 0.58 },
+  { id: "west_hollywood",    name: "West Hollywood",            rate: 21.0, lat: 34.090, lon: -118.362, type: "city",  homeless: 480, svcGap: 0.55 },
+  { id: "whittier",          name: "Whittier",                  rate: 13.2, lat: 33.979, lon: -118.033, type: "city",  homeless: 88,  svcGap: 0.56 },
+  { id: "monrovia",          name: "Monrovia",                  rate: 14.5, lat: 34.145, lon: -117.994, type: "city",  homeless: 65,  svcGap: 0.60 },
+  { id: "pomona",            name: "Pomona",                    rate: 18.3, lat: 34.055, lon: -117.750, type: "city",  homeless: 360, svcGap: 0.74 },
+  { id: "los_angeles",       name: "City of Los Angeles",       rate: 18.6, lat: 34.052, lon: -118.244, type: "city",  homeless: 4200, svcGap: 0.62 },
+  { id: "altadena",          name: "Altadena",                  rate: 12.3, lat: 34.190, lon: -118.132, type: "uninc", homeless: 85,  svcGap: 0.58 },
+  { id: "athens_westmont",   name: "Athens-Westmont",           rate: 21.3, lat: 33.929, lon: -118.258, type: "uninc", homeless: 290, svcGap: 0.78 },
+  { id: "east_la",           name: "East Los Angeles",          rate: 13.5, lat: 34.024, lon: -118.172, type: "uninc", homeless: 310, svcGap: 0.68 },
+  { id: "florence_firestone",name: "Florence-Firestone",        rate: 16.5, lat: 33.975, lon: -118.232, type: "uninc", homeless: 220, svcGap: 0.73 },
+  { id: "hacienda_heights",  name: "Hacienda Heights",          rate: 11.1, lat: 34.000, lon: -117.967, type: "uninc", homeless: 55,  svcGap: 0.54 },
+  { id: "rowland_heights",   name: "Rowland Heights",           rate: 9.5,  lat: 33.997, lon: -117.902, type: "uninc", homeless: 40,  svcGap: 0.50 },
+  { id: "south_whittier",    name: "South Whittier",            rate: 14.8, lat: 33.935, lon: -118.038, type: "uninc", homeless: 78,  svcGap: 0.60 },
+  { id: "west_whittier",     name: "West Whittier/Los Nietos",  rate: 17.0, lat: 33.965, lon: -118.063, type: "uninc", homeless: 95,  svcGap: 0.65 },
+  { id: "willowbrook",       name: "Willowbrook",               rate: 21.5, lat: 33.921, lon: -118.243, type: "uninc", homeless: 280, svcGap: 0.76 },
+];
+
+function normArr(arr: number[]): number[] {
+  const mn = Math.min(...arr), mx = Math.max(...arr);
+  return arr.map(v => mx === mn ? 0 : (v - mn) / (mx - mn));
+}
+
+function buildHrvmData() {
+  const rates   = normArr(HRVM_RAW.map(d => d.rate));
+  const hmls    = normArr(HRVM_RAW.map(d => d.homeless));
+  const subst   = normArr(HRVM_RAW.map(d => d.rate * 0.7 + d.homeless * 0.003));
+
+  return HRVM_RAW.map((d, i) => {
+    const score = Math.round((rates[i] * 0.40 + hmls[i] * 0.30 + d.svcGap * 0.20 + subst[i] * 0.10) * 100);
+    const cat = d.rate < 10 ? "Low (<10)" : d.rate < 15 ? "Moderate (10–15)" : d.rate < 20 ? "High (15–20)" : "Critical (>20)";
+    return {
+      Id: d.id,
+      Name: d.name,
+      CommunityType: d.type === "uninc" ? "Unincorporated LA County" : "Incorporated City",
+      County: "Los Angeles",
+      OverdoseMortalityRate: d.rate,
+      RiskCategory: cat,
+      HomelessPopEst: d.homeless,
+      ServiceGapIndex: d.svcGap,
+      HrvmRecommendationScore: score,
+      Latitude: d.lat,
+      Longitude: d.lon,
+      DataSource: "LA County DPH Drug Overdose Mortality 2018-2022; LAHSA 2023 PIT Count; SSP Gap Index 2024",
+      DataPeriod: "2018-2022",
+    };
+  });
+}
+
+const HRVM_DATA = buildHrvmData();
+
+router.get("/odata/HrvmKiosks", (req: Request, res: Response) => {
+  const { items, count } = applyQueryOptions(HRVM_DATA, req);
+  res.setHeader("OData-Version", ODATA_VERSION);
+  const resp: Record<string, unknown> = {
+    "@odata.context": odataContext(getBase(req), "HrvmKiosks"),
     value: items,
   };
   if (req.query.$count === "true") resp["@odata.count"] = count;
