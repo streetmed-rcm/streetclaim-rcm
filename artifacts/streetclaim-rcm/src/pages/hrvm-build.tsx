@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { ShoppingCart, Zap, Shield, Wifi, Sun, BarChart2, Thermometer, CheckCircle, X, ChevronDown, ChevronUp, Send, Phone, Mail, Building2 } from "lucide-react";
 
@@ -18,6 +18,7 @@ interface HrvmModel {
   tier: number;
   name: string;
   tagline: string;
+  imagePath: string;
   price: number;
   priceLabel: string;
   color: string;
@@ -48,6 +49,7 @@ const MODELS: HrvmModel[] = [
     tier: 1,
     name: "Virtual Board Kiosk",
     tagline: "Digital harm reduction — no moving parts",
+    imagePath: "/hrvm-t1-kiosk.png",
     price: 5000,
     priceLabel: "$5,000",
     color: "#2563eb",
@@ -86,6 +88,7 @@ const MODELS: HrvmModel[] = [
     tier: 2,
     name: "Compact Dispenser Unit",
     tagline: "Secured wall-mount with physical dispensing",
+    imagePath: "/hrvm-t2-compact.png",
     price: 15000,
     priceLabel: "$15,000",
     color: "#16a34a",
@@ -124,6 +127,7 @@ const MODELS: HrvmModel[] = [
     tier: 3,
     name: "Standard HRVM",
     tagline: "Full harm reduction vending — field standard",
+    imagePath: "/hrvm-t3-standard.png",
     price: 35000,
     priceLabel: "$35,000",
     color: "#d97706",
@@ -165,6 +169,7 @@ const MODELS: HrvmModel[] = [
     tier: 4,
     name: "Smart HRVM Pro",
     tagline: "IoT-connected with real-time analytics + solar",
+    imagePath: "/hrvm-t4-smart.png",
     price: 65000,
     priceLabel: "$65,000",
     color: "#7c3aed",
@@ -208,6 +213,7 @@ const MODELS: HrvmModel[] = [
     tier: 5,
     name: "Enterprise HRVM Hub",
     tagline: "Large-format solar hub with telehealth + API",
+    imagePath: "/hrvm-t5-enterprise.png",
     price: 120000,
     priceLabel: "$120,000",
     color: "#b91c1c",
@@ -432,25 +438,87 @@ function ComponentTable({ components }: { components: Component[] }) {
 // Model Card
 // ─────────────────────────────────────────────────────────
 
+const TIER_DIFFERENTIATORS: Record<string, { icon: ReactNode; label: string }[]> = {
+  virtual_kiosk: [
+    { icon: <Wifi className="w-3 h-3" />, label: "Digital display only" },
+    { icon: <Zap className="w-3 h-3" />, label: "No mechanical parts" },
+    { icon: <Shield className="w-3 h-3" />, label: "QR + multi-language" },
+  ],
+  compact_dispenser: [
+    { icon: <ShoppingCart className="w-3 h-3" />, label: "20-slot physical dispense" },
+    { icon: <Wifi className="w-3 h-3" />, label: "Cloud inventory alerts" },
+    { icon: <Shield className="w-3 h-3" />, label: "Tamper-proof lock" },
+  ],
+  standard_hrvm: [
+    { icon: <Thermometer className="w-3 h-3" />, label: "Refrigerated compartment" },
+    { icon: <Shield className="w-3 h-3" />, label: "ADA compliant display" },
+    { icon: <BarChart2 className="w-3 h-3" />, label: "FHIR R4 dispense log" },
+  ],
+  smart_hrvm_pro: [
+    { icon: <Sun className="w-3 h-3" />, label: "Solar + off-grid battery" },
+    { icon: <Zap className="w-3 h-3" />, label: "Robotic arm dispensing" },
+    { icon: <BarChart2 className="w-3 h-3" />, label: "On-device AI forecasting" },
+  ],
+  enterprise_hub: [
+    { icon: <Wifi className="w-3 h-3" />, label: "Starlink + LTE + fiber" },
+    { icon: <Building2 className="w-3 h-3" />, label: "200+ slot modular pods" },
+    { icon: <Shield className="w-3 h-3" />, label: "Telehealth + DID biometric" },
+  ],
+};
+
 function ModelCard({ model, onRfq }: { model: HrvmModel; onRfq: (m: HrvmModel) => void }) {
+  const differentiators = TIER_DIFFERENTIATORS[model.id] ?? [];
   return (
     <Card className="relative overflow-hidden border-2 hover:shadow-lg transition-shadow" style={{ borderColor: model.color + "44" }}>
       <div className="absolute top-0 left-0 right-0 h-1.5" style={{ background: model.color }} />
-      <CardHeader className="pb-3 pt-5">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold border ${model.badgeColor}`}>
-                TIER {model.tier} · {model.badge}
-              </span>
+
+      {/* Model image */}
+      <div className="relative overflow-hidden bg-gray-100" style={{ height: 220 }}>
+        <img
+          src={model.imagePath}
+          alt={model.name}
+          className="w-full h-full object-cover object-center"
+        />
+        {/* Tier badge overlay */}
+        <div className="absolute top-3 left-3">
+          <span className={`text-[10px] px-2 py-1 rounded-full font-bold border shadow-sm ${model.badgeColor}`}>
+            TIER {model.tier} · {model.badge}
+          </span>
+        </div>
+        {/* Price overlay */}
+        <div className="absolute bottom-0 left-0 right-0 px-4 py-3"
+          style={{ background: `linear-gradient(to top, ${model.color}ee, transparent)` }}>
+          <div className="flex items-end justify-between">
+            <div>
+              <p className="text-white font-black text-2xl leading-none">{model.priceLabel}</p>
+              <p className="text-white/70 text-xs">per unit</p>
             </div>
-            <CardTitle className="text-lg font-bold text-gray-900">{model.name}</CardTitle>
-            <CardDescription className="text-sm">{model.tagline}</CardDescription>
+            <div className="flex gap-1.5">
+              {differentiators.map(d => (
+                <div key={d.label} className="flex items-center gap-1 bg-white/20 backdrop-blur-sm border border-white/30 rounded-full px-2 py-0.5">
+                  <span className="text-white">{d.icon}</span>
+                  <span className="text-white text-[10px] font-semibold whitespace-nowrap hidden sm:block">{d.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="text-right flex-shrink-0">
-            <p className="text-2xl font-black" style={{ color: model.color }}>{model.priceLabel}</p>
-            <p className="text-xs text-gray-400">per unit</p>
-          </div>
+        </div>
+      </div>
+
+      <CardHeader className="pb-3 pt-4">
+        <div>
+          <CardTitle className="text-lg font-bold text-gray-900">{model.name}</CardTitle>
+          <CardDescription className="text-sm">{model.tagline}</CardDescription>
+        </div>
+
+        {/* Key differentiators — mobile-friendly row */}
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {differentiators.map(d => (
+            <span key={d.label} className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full border"
+              style={{ color: model.color, borderColor: model.color + "44", background: model.color + "0d" }}>
+              {d.icon}{d.label}
+            </span>
+          ))}
         </div>
 
         {/* Quick specs */}
