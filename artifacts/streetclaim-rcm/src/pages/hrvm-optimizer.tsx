@@ -1,6 +1,6 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { useSearch } from "wouter";
-import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
   ResponsiveContainer, Cell, PieChart, Pie, Legend,
@@ -139,6 +139,71 @@ const SCORE_COLOR: Record<string, string> = {
 };
 
 // ─────────────────────────────────────────────────────────
+// HRVM Simulation models
+// ─────────────────────────────────────────────────────────
+interface SimModel {
+  id: string;
+  name: string;
+  shortName: string;
+  price: string;
+  reduction: number; // fractional e.g. 0.28
+  reductionPct: string; // display e.g. "28%"
+  color: string;
+  tier: number;
+  emoji: string;
+}
+
+const SIM_MODELS: SimModel[] = [
+  { id: "virtual_kiosk",     tier: 1, name: "Virtual Board Kiosk",   shortName: "Kiosk",      price: "$5k",   reduction: 0.08, reductionPct: "8%",  color: "#2563eb", emoji: "🖥" },
+  { id: "compact_dispenser", tier: 2, name: "Compact Dispenser",     shortName: "Compact",    price: "$15k",  reduction: 0.18, reductionPct: "18%", color: "#16a34a", emoji: "📦" },
+  { id: "standard_hrvm",     tier: 3, name: "Standard HRVM",         shortName: "Standard",   price: "$35k",  reduction: 0.28, reductionPct: "28%", color: "#d97706", emoji: "🤝" },
+  { id: "smart_hrvm_pro",    tier: 4, name: "Smart HRVM Pro",        shortName: "Smart Pro",  price: "$65k",  reduction: 0.38, reductionPct: "38%", color: "#7c3aed", emoji: "⚡" },
+  { id: "enterprise_hub",    tier: 5, name: "Enterprise Hub",        shortName: "Enterprise", price: "$120k", reduction: 0.48, reductionPct: "48%", color: "#b91c1c", emoji: "🏗" },
+];
+
+interface PlacedVM { modelId: string; model: SimModel; placedAt: number; }
+
+function projectedRate(originalRate: number, model: SimModel): number {
+  return Math.max(originalRate * (1 - model.reduction), 1.5);
+}
+
+function livesSaved(originalRate: number, model: SimModel, homeless: number): number {
+  const rateReduction = originalRate * model.reduction;
+  const estimatedPop = homeless * 45;
+  return (rateReduction / 100000) * estimatedPop;
+}
+
+// ─────────────────────────────────────────────────────────
+// Map click handler for simulation drop
+// ─────────────────────────────────────────────────────────
+function SimMapClickHandler({
+  scored,
+  selectedModel,
+  onPlace,
+}: {
+  scored: ReturnType<typeof computeScores>;
+  selectedModel: SimModel | null;
+  onPlace: (communityId: string, model: SimModel) => void;
+}) {
+  useMapEvents({
+    click(e) {
+      if (!selectedModel) return;
+      // find nearest community within 0.12 degrees
+      let nearest: (typeof scored)[0] | null = null;
+      let minDist = Infinity;
+      for (const c of scored) {
+        const d = Math.hypot(c.lat - e.latlng.lat, c.lon - e.latlng.lng);
+        if (d < minDist) { minDist = d; nearest = c; }
+      }
+      if (nearest && minDist < 0.12) {
+        onPlace(nearest.id, selectedModel);
+      }
+    },
+  });
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────
 // Custom bar label
 // ─────────────────────────────────────────────────────────
 const CustomBarLabel = (props: { x?: number; y?: number; width?: number; value?: number }) => {
@@ -212,10 +277,54 @@ export default function HRVMOptimizerPage() {
   const sorted = useMemo(() => [...scored].sort((a, b) => b.recScore - a.recScore), [scored]);
   const top15  = useMemo(() => [...scored].sort((a, b) => b.rate - a.rate).slice(0, 15), [scored]);
 
-  // If a focus param is present, default to map tab
-  const [activeTab, setActiveTab] = useState<"map" | "charts" | "scores">(
+  const [activeTab, setActiveTab] = useState<"map" | "simulate" | "charts" | "scores">(
     focusId ? "map" : "map"
   );
+
+  // ── Simulation state ─────────────────────────────────
+  const [placedVMs, setPlacedVMs] = useState<Record<string, PlacedVM>>({});
+  const [selectedModel, setSelectedModel] = useState<SimModel | null>(null);
+  const [draggingModel, setDraggingModel] = useState<SimModel | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [justPlaced, setJustPlaced] = useState<string | null>(null); // flash animation
+
+  const placeVM = useCallback((communityId: string, model: SimModel) => {
+    setPlacedVMs(prev => ({ ...prev, [communityId]: { modelId: model.id, model, placedAt: Date.now() } }));
+    setJustPlaced(communityId);
+    setTimeout(() => setJustPlaced(null), 1200);
+  }, []);
+
+  const removeVM = useCallback((communityId: string) => {
+    setPlacedVMs(prev => { const n = { ...prev }; delete n[communityId]; return n; });
+  }, []);
+
+  const resetSim = useCallback(() => {
+    setPlacedVMs({});
+    setSelectedModel(null);
+    setDraggingModel(null);
+  }, []);
+
+  // Running totals
+  const simSummary = useMemo(() => {
+    let totalLives = 0;
+    let totalReductionSum = 0;
+    const count = Object.keys(placedVMs).length;
+    Object.entries(placedVMs).forEach(([cid, pvm]) => {
+      const c = scored.find(s => s.id === cid);
+      if (!c) return;
+      totalLives += livesSaved(c.rate, pvm.model, c.homeless);
+      totalReductionSum += pvm.model.reduction;
+    });
+    return {
+      count,
+      totalLives,
+      avgReduction: count > 0 ? (totalReductionSum / count) * 100 : 0,
+      totalInvestment: Object.values(placedVMs).reduce((s, pvm) => {
+        const prices: Record<string, number> = { virtual_kiosk: 5000, compact_dispenser: 15000, standard_hrvm: 35000, smart_hrvm_pro: 65000, enterprise_hub: 120000 };
+        return s + (prices[pvm.model.id] ?? 0);
+      }, 0),
+    };
+  }, [placedVMs, scored]);
 
   const focusCommunity = useMemo(
     () => scored.find(d => d.id === focusId) ?? null,
@@ -234,9 +343,10 @@ export default function HRVMOptimizerPage() {
   const best = sorted[0];
 
   const TABS = [
-    { key: "map",    label: "Heat Map" },
-    { key: "charts", label: "Pie + Bar Charts" },
-    { key: "scores", label: "Recommendation Scores" },
+    { key: "map",      label: "Heat Map" },
+    { key: "simulate", label: "🧪 Simulate HRVM Impact" },
+    { key: "charts",   label: "Pie + Bar Charts" },
+    { key: "scores",   label: "Recommendation Scores" },
   ] as const;
 
   return (
@@ -431,6 +541,326 @@ export default function HRVMOptimizerPage() {
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {/* ── TAB: Simulate ── */}
+        {activeTab === "simulate" && (
+          <div className="space-y-4">
+
+            {/* Instructions */}
+            <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+              <strong>How to simulate:</strong> Select an HRVM model below (or drag it), then click any community on the map — or drag a model card onto a community row in the list. The map updates live with projected overdose reductions.
+            </div>
+
+            {/* Model selector strip */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                1 · Choose a model — drag or click to select
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {SIM_MODELS.map(m => (
+                  <div
+                    key={m.id}
+                    draggable
+                    onDragStart={() => { setDraggingModel(m); setSelectedModel(m); }}
+                    onDragEnd={() => setDraggingModel(null)}
+                    onClick={() => setSelectedModel(prev => prev?.id === m.id ? null : m)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border-2 cursor-grab active:cursor-grabbing select-none transition-all ${
+                      selectedModel?.id === m.id
+                        ? "shadow-lg scale-105"
+                        : "hover:shadow-md hover:scale-102 opacity-80 hover:opacity-100"
+                    }`}
+                    style={{
+                      borderColor: selectedModel?.id === m.id ? m.color : m.color + "55",
+                      background: selectedModel?.id === m.id ? m.color + "18" : "white",
+                    }}
+                  >
+                    <span className="text-lg">{m.emoji}</span>
+                    <div>
+                      <p className="text-xs font-bold text-gray-800 leading-none">{m.shortName}</p>
+                      <p className="text-[10px] text-gray-500">{m.price}</p>
+                    </div>
+                    <span
+                      className="ml-1 text-xs font-black px-1.5 py-0.5 rounded"
+                      style={{ background: m.color, color: "white" }}
+                    >
+                      −{m.reductionPct}
+                    </span>
+                  </div>
+                ))}
+                {selectedModel && (
+                  <div className="flex items-center text-xs text-gray-500 pl-1">
+                    ← <strong className="ml-1" style={{ color: selectedModel.color }}>{selectedModel.name}</strong> selected · click map or drop on list
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              2 · Place on the map or drag onto a community row →
+            </p>
+
+            {/* Map + List side by side */}
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+
+              {/* Map panel */}
+              <div className="lg:col-span-3">
+                <Card className="overflow-hidden">
+                  <CardHeader className="pb-2 pt-3">
+                    <CardTitle className="text-sm">
+                      Overdose Mortality Map
+                      {selectedModel && (
+                        <span className="ml-2 text-xs font-normal" style={{ color: selectedModel.color }}>
+                          · Click any circle to place {selectedModel.shortName} HRVM
+                        </span>
+                      )}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="h-[480px] rounded-b-lg overflow-hidden">
+                      <MapContainer
+                        center={[34.05, -118.25]}
+                        zoom={10}
+                        style={{ height: "100%", width: "100%" }}
+                        className={selectedModel ? "cursor-crosshair" : ""}
+                      >
+                        <TileLayer
+                          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                          attribution='&copy; OpenStreetMap contributors'
+                        />
+                        <SimMapClickHandler scored={scored} selectedModel={selectedModel} onPlace={placeVM} />
+
+                        {/* Original circles (faded when VM placed) */}
+                        {scored.map(d => {
+                          const placed = placedVMs[d.id];
+                          return (
+                            <CircleMarker
+                              key={`orig-${d.id}`}
+                              center={[d.lat, d.lon]}
+                              radius={rateRadius(d.rate)}
+                              pathOptions={{
+                                fillColor: rateColor(d.rate),
+                                color: rateColor(d.rate),
+                                fillOpacity: placed ? 0.20 : 0.70,
+                                weight: placed ? 1 : 1.5,
+                              }}
+                            >
+                              {!placed && (
+                                <Tooltip>
+                                  <div className="text-xs">
+                                    <p className="font-bold">{d.name}</p>
+                                    <p>Mortality: <strong>{d.rate}</strong>/100k</p>
+                                    {selectedModel && <p className="text-blue-600 font-semibold">Click to place {selectedModel.shortName}</p>}
+                                  </div>
+                                </Tooltip>
+                              )}
+                            </CircleMarker>
+                          );
+                        })}
+
+                        {/* Projected circles (green) for placed VMs */}
+                        {Object.entries(placedVMs).map(([cid, pvm]) => {
+                          const c = scored.find(s => s.id === cid);
+                          if (!c) return null;
+                          const newRate = projectedRate(c.rate, pvm.model);
+                          const isFlash = justPlaced === cid;
+                          return (
+                            <CircleMarker
+                              key={`proj-${cid}`}
+                              center={[c.lat, c.lon]}
+                              radius={rateRadius(newRate) + (isFlash ? 6 : 0)}
+                              pathOptions={{
+                                fillColor: "#16a34a",
+                                color: isFlash ? "#ffffff" : "#15803d",
+                                fillOpacity: 0.80,
+                                weight: isFlash ? 3 : 2,
+                              }}
+                            >
+                              <Tooltip permanent>
+                                <div className="text-xs min-w-[160px]">
+                                  <p className="font-bold text-green-700">{c.name}</p>
+                                  <p className="text-gray-400 line-through">{c.rate}/100k</p>
+                                  <p className="text-green-700 font-bold">→ {newRate.toFixed(1)}/100k</p>
+                                  <p className="text-[10px] text-gray-500">{pvm.model.emoji} {pvm.model.shortName} placed</p>
+                                  <p className="text-green-600 font-semibold">−{pvm.model.reductionPct} overdoses</p>
+                                </div>
+                              </Tooltip>
+                            </CircleMarker>
+                          );
+                        })}
+                      </MapContainer>
+                    </div>
+                    {/* Map legend */}
+                    <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 bg-white border-t border-gray-100 text-xs">
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{ background: "#cc0000" }} />Original (red = high risk)</span>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block bg-green-600" />Projected after HRVM</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Community drop-zone list */}
+              <div className="lg:col-span-2">
+                <Card className="overflow-hidden">
+                  <CardHeader className="pb-2 pt-3">
+                    <CardTitle className="text-sm">High-Risk Communities</CardTitle>
+                    <CardDescription className="text-xs">Drag a model card here to place it</CardDescription>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="overflow-y-auto" style={{ maxHeight: 510 }}>
+                      {sorted.map((d, i) => {
+                        const placed = placedVMs[d.id];
+                        const newRate = placed ? projectedRate(d.rate, placed.model) : null;
+                        const isOver = dragOverId === d.id;
+                        const isFlash = justPlaced === d.id;
+                        return (
+                          <div
+                            key={d.id}
+                            onDragOver={e => { e.preventDefault(); setDragOverId(d.id); }}
+                            onDragLeave={() => setDragOverId(null)}
+                            onDrop={e => {
+                              e.preventDefault();
+                              setDragOverId(null);
+                              if (draggingModel) placeVM(d.id, draggingModel);
+                            }}
+                            onClick={() => {
+                              if (selectedModel && !placed) placeVM(d.id, selectedModel);
+                            }}
+                            className={`flex items-center gap-3 px-3 py-2.5 border-b border-gray-100 transition-all
+                              ${isFlash ? "bg-green-100 border-green-300" : ""}
+                              ${isOver ? "bg-blue-50 border-blue-300 scale-[1.01]" : ""}
+                              ${!placed && selectedModel ? "hover:bg-blue-50 cursor-pointer" : ""}
+                              ${placed ? "" : "hover:bg-gray-50"}
+                            `}
+                          >
+                            {/* Rank */}
+                            <span className="text-xs font-bold text-gray-300 w-5 text-right flex-shrink-0">{i + 1}</span>
+
+                            {/* Rate indicators */}
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              <span className="w-2.5 h-2.5 rounded-full" style={{ background: rateColor(d.rate), opacity: placed ? 0.3 : 1 }} />
+                              {placed && <span className="w-2.5 h-2.5 rounded-full bg-green-500" />}
+                            </div>
+
+                            {/* Name + rates */}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-semibold text-gray-800 truncate">{d.name}</p>
+                              <div className="flex items-center gap-1.5 text-[10px]">
+                                <span style={{ color: rateColor(d.rate) }} className={placed ? "line-through opacity-50" : ""}>
+                                  {d.rate}/100k
+                                </span>
+                                {placed && newRate !== null && (
+                                  <>
+                                    <span className="text-gray-300">→</span>
+                                    <span className="text-green-600 font-bold">{newRate.toFixed(1)}/100k</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Placed VM or drop hint */}
+                            {placed ? (
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                <span className="text-xs px-1.5 py-0.5 rounded font-semibold text-white"
+                                  style={{ background: placed.model.color }}>
+                                  {placed.model.emoji} −{placed.model.reductionPct}
+                                </span>
+                                <button
+                                  onClick={e => { e.stopPropagation(); removeVM(d.id); }}
+                                  className="text-gray-300 hover:text-red-500 transition-colors text-sm leading-none"
+                                  title="Remove VM"
+                                >✕</button>
+                              </div>
+                            ) : isOver ? (
+                              <span className="text-xs text-blue-500 font-semibold flex-shrink-0">Drop!</span>
+                            ) : selectedModel ? (
+                              <span className="text-[10px] text-gray-300 flex-shrink-0">click</span>
+                            ) : (
+                              <span className="text-[10px] text-gray-200 flex-shrink-0">↓ drag</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+
+            {/* Impact Summary */}
+            <div className={`rounded-xl border-2 px-6 py-5 transition-all ${
+              simSummary.count > 0 ? "border-green-400 bg-green-50" : "border-gray-200 bg-white"
+            }`}>
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Simulation Impact Summary</p>
+                  <p className="text-lg font-bold text-gray-800 mt-0.5">
+                    {simSummary.count === 0
+                      ? "No HRVMs placed yet — select a model and place it on the map"
+                      : `${simSummary.count} HRVM${simSummary.count > 1 ? "s" : ""} placed across LA County`}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-6">
+                  <div className="text-center">
+                    <p className="text-3xl font-black text-green-600">
+                      {simSummary.totalLives < 1 ? "<1" : simSummary.totalLives.toFixed(1)}
+                    </p>
+                    <p className="text-xs text-gray-500 font-medium">Projected lives saved/yr</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-3xl font-black text-blue-600">
+                      {simSummary.avgReduction.toFixed(0)}%
+                    </p>
+                    <p className="text-xs text-gray-500 font-medium">Avg overdose reduction</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-3xl font-black text-purple-600">
+                      ${simSummary.totalInvestment.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-gray-500 font-medium">Total investment</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-3xl font-black text-amber-600">
+                      {simSummary.totalLives > 0
+                        ? `$${Math.round(simSummary.totalInvestment / simSummary.totalLives).toLocaleString()}`
+                        : "—"}
+                    </p>
+                    <p className="text-xs text-gray-500 font-medium">Cost per life saved/yr</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Placed VM list */}
+              {simSummary.count > 0 && (
+                <div className="mt-4 pt-4 border-t border-green-200">
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(placedVMs).map(([cid, pvm]) => {
+                      const c = scored.find(s => s.id === cid);
+                      if (!c) return null;
+                      const ls = livesSaved(c.rate, pvm.model, c.homeless);
+                      return (
+                        <div key={cid} className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold border"
+                          style={{ borderColor: pvm.model.color + "66", background: pvm.model.color + "11", color: pvm.model.color }}>
+                          {pvm.model.emoji} {c.name} · −{pvm.model.reductionPct} · ~{ls < 0.1 ? "<0.1" : ls.toFixed(1)} lives/yr
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-3 flex gap-3">
+                    <button
+                      onClick={resetSim}
+                      className="text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors font-semibold"
+                    >
+                      Reset simulation
+                    </button>
+                    <p className="text-xs text-gray-400 self-center">
+                      * Projections are hypothetical and based on peer-reviewed harm reduction efficacy data. Actual outcomes depend on utilization, restocking, and community conditions.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         )}
 
         {/* ── TAB: Charts ── */}
