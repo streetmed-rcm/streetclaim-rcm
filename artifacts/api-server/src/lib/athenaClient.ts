@@ -288,12 +288,15 @@ export interface SubmitVisitResult {
   patientId: string;
   claimId: string;
   practiceId: string;
+  /** True when a pre-existing patient record was found and reused (no duplicate created) */
+  isExistingPatient: boolean;
 }
 
 /**
- * Point-of-care enrollment workflow:
- *   Step 1 — Register the patient in athenahealth (POST /patients, form-encoded)
- *   Step 2 — Immediately submit a POS 27 street claim for that patient
+ * Point-of-care enrollment workflow with duplicate prevention:
+ *   Step 1 — Search athenahealth for an existing patient by firstname/lastname/dob.
+ *             If found, reuse that patient ID (no duplicate). If not found, register.
+ *   Step 2 — Immediately submit a POS 27 street claim for that patient.
  *
  * Z59.01 and POS 27 are guaranteed by submitStreetClaim. The caller only needs
  * to supply the clinical data captured in the field.
@@ -303,15 +306,35 @@ export async function submitVisit(
 ): Promise<SubmitVisitResult> {
   const practiceId = getPracticeId();
 
-  // Step 1: Register patient
-  const patientId = await createAthenaPatientQuick({
-    firstname:    payload.firstname,
-    lastname:     payload.lastname,
-    dob:          payload.dob,
-    sex:          payload.sex,
-    zip:          payload.zip,
-    departmentid: payload.departmentId ?? "1",
+  // Step 1: Search-first — prevent duplicate patient records in athenaOne
+  let patientId: string;
+  let isExistingPatient = false;
+
+  console.log(`[submitVisit] Searching for existing patient: ${payload.firstname} ${payload.lastname} DOB:${payload.dob}`);
+  const existing = await searchAthenaPatients({
+    firstname: payload.firstname,
+    lastname:  payload.lastname,
+    dob:       payload.dob,
+    limit:     5,
   });
+
+  if (existing.length > 0) {
+    // Reuse the first matching record — no duplicate created
+    patientId         = existing[0].patientid;
+    isExistingPatient = true;
+    console.log(`[submitVisit] Step 1 Success: Found existing Patient ID ${patientId} — skipping registration`);
+  } else {
+    // No match — register as a new patient
+    patientId = await createAthenaPatientQuick({
+      firstname:    payload.firstname,
+      lastname:     payload.lastname,
+      dob:          payload.dob,
+      sex:          payload.sex,
+      zip:          payload.zip,
+      departmentid: payload.departmentId ?? "1",
+    });
+    console.log(`[submitVisit] Step 1 Success: Created Patient ID ${patientId}`);
+  }
 
   // Step 2: Submit POS 27 claim
   const claimId = await submitStreetClaim({
@@ -328,8 +351,8 @@ export async function submitVisit(
     liveGpsTimestamp: payload.liveGpsTimestamp,
   });
 
-  console.log(`[submitVisit] patient=${patientId} claim=${claimId} practice=${practiceId}`);
-  return { patientId, claimId, practiceId };
+  console.log(`[submitVisit] Step 2 Success: Street Claim Submitted! { claimid: ${claimId} }`);
+  return { patientId, claimId, practiceId, isExistingPatient };
 }
 
 // ---------------------------------------------------------------------------

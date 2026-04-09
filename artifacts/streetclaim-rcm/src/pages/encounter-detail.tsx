@@ -120,8 +120,9 @@ export default function EncounterDetail() {
   const [createError, setCreateError]         = useState("");
 
   // Submit Visit (atomic: register + claim)
-  const [svStep,  setSvStep]  = useState<SubmitVisitStep>("idle");
-  const [svError, setSvError] = useState("");
+  const [svStep,             setSvStep]             = useState<SubmitVisitStep>("idle");
+  const [svError,            setSvError]            = useState("");
+  const [svIsExisting,       setSvIsExisting]       = useState(false);
 
   // Live GPS capture at billing time
   const [gpsStatus, setGpsStatus] = useState<GpsCaptureStatus>("idle");
@@ -259,9 +260,10 @@ export default function EncounterDetail() {
       await new Promise((r) => setTimeout(r, 600));
 
       const data = await res.json() as {
-        patientId?: string;
-        claimId?:   string;
-        error?:     string;
+        patientId?:         string;
+        claimId?:           string;
+        isExistingPatient?: boolean;
+        error?:             string;
       };
 
       if (!res.ok) {
@@ -270,6 +272,7 @@ export default function EncounterDetail() {
         return;
       }
 
+      setSvIsExisting(data.isExistingPatient ?? false);
       await updateEncounterClaim(encounter.id, data.patientId!, data.claimId!);
       setAthenaPatientId(data.patientId!);
       setEncounter((prev) => prev
@@ -598,12 +601,19 @@ export default function EncounterDetail() {
                           </div>
                           <div className="flex items-center gap-2 text-xs text-emerald-600">
                             <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                            Step 1 complete — patient registered
+                            {svIsExisting
+                              ? "Step 1 — Existing patient found, no duplicate created"
+                              : "Step 1 — New patient registered in athenahealth"}
                           </div>
                           <div className="flex items-center gap-2 text-xs text-emerald-600">
                             <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                            Step 2 complete — POS 27 claim filed
+                            Step 2 — POS 27 claim filed with GPS audit stamp
                           </div>
+                          {svIsExisting && (
+                            <p className="text-xs text-blue-600 pl-5">
+                              Search-first check matched an existing record — patient ID reused safely.
+                            </p>
+                          )}
                         </div>
                       ) : createState === "done" ? (
                         <div className="flex items-center gap-2 text-emerald-700 text-xs">
@@ -627,14 +637,14 @@ export default function EncounterDetail() {
                                   ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                   : <CheckCircle2 className="w-3.5 h-3.5" />
                                 }
-                                Step 1 of 2 — Registering patient in athenahealth…
+                                Step 1 of 2 — Searching athenahealth (dedup check), then registering if new…
                               </div>
                               <div className={`flex items-center gap-2 text-xs ${svStep === "filing" ? "text-emerald-700 font-semibold" : "text-gray-400"}`}>
                                 {svStep === "filing"
                                   ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                   : <div className="w-3.5 h-3.5 rounded-full border border-gray-300" />
                                 }
-                                Step 2 of 2 — Filing POS 27 claim…
+                                Step 2 of 2 — Filing POS 27 claim with GPS audit stamp…
                               </div>
                             </div>
                           )}

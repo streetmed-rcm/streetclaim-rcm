@@ -415,12 +415,16 @@ router.post("/athena/submit-visit", async (req: Request, res: Response) => {
       liveGpsTimestamp: typeof liveGpsTimestamp === "string" ? liveGpsTimestamp : null,
     });
 
-    console.log(`[athena/submit-visit] Success — patient=${result.patientId} claim=${result.claimId}`);
+    const step1Label = result.isExistingPatient
+      ? `Existing patient found (ID ${result.patientId}) — no duplicate created`
+      : `New patient registered (ID ${result.patientId})`;
+
+    console.log(`[athena/submit-visit] Success — patient=${result.patientId} (existing=${result.isExistingPatient}) claim=${result.claimId}`);
     res.status(201).json({
       ...result,
       steps: [
-        { step: 1, label: "Patient registered",  patientId: result.patientId },
-        { step: 2, label: "POS 27 claim filed",  claimId:   result.claimId   },
+        { step: 1, label: step1Label, patientId: result.patientId, isExistingPatient: result.isExistingPatient },
+        { step: 2, label: `POS 27 claim filed (ID ${result.claimId})`, claimId: result.claimId },
       ],
     });
   } catch (err) {
