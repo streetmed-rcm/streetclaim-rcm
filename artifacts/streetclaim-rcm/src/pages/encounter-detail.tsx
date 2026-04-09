@@ -22,6 +22,8 @@ import {
   X,
   ChevronDown,
   ChevronUp,
+  Lock,
+  ShieldCheck,
 } from "lucide-react";
 
 function statusColor(status: EncounterRecord["syncStatus"]) {
@@ -65,6 +67,29 @@ type PatientSearchState = "idle" | "searching" | "done" | "error";
 type PatientCreateState = "idle" | "creating" | "done" | "error";
 type ClaimSubmitState   = "idle" | "submitting" | "success" | "error";
 type SubmitVisitStep    = "idle" | "registering" | "filing" | "done" | "error";
+type GpsCaptureStatus   = "idle" | "capturing" | "granted" | "denied";
+
+interface LiveGps {
+  lat: number;
+  lng: number;
+  timestamp: string;
+}
+
+/** Request current GPS from the device. Returns null if denied. */
+function captureCurrentGps(): Promise<LiveGps | null> {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) { resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({
+        lat:       pos.coords.latitude,
+        lng:       pos.coords.longitude,
+        timestamp: new Date().toISOString(),
+      }),
+      () => resolve(null),
+      { timeout: 8000, maximumAge: 30_000 },
+    );
+  });
+}
 
 export default function EncounterDetail() {
   const params  = useParams<{ id: string }>();
@@ -97,6 +122,10 @@ export default function EncounterDetail() {
   // Submit Visit (atomic: register + claim)
   const [svStep,  setSvStep]  = useState<SubmitVisitStep>("idle");
   const [svError, setSvError] = useState("");
+
+  // Live GPS capture at billing time
+  const [gpsStatus, setGpsStatus] = useState<GpsCaptureStatus>("idle");
+  const [liveGps,   setLiveGps]   = useState<LiveGps | null>(null);
 
   useEffect(() => {
     getEncounter(params.id).then((data) => {
@@ -185,8 +214,19 @@ export default function EncounterDetail() {
 
   async function handleSubmitVisit() {
     if (!encounter || !createFirst.trim() || !createLast.trim() || !createDob.trim()) return;
-    setSvStep("registering");
     setSvError("");
+
+    // Step 0: Capture live GPS at billing time (audit pillar 3)
+    setGpsStatus("capturing");
+    const live = await captureCurrentGps();
+    if (live) {
+      setLiveGps(live);
+      setGpsStatus("granted");
+    } else {
+      setGpsStatus("denied");
+    }
+
+    setSvStep("registering");
 
     const diagnoses      = deriveDiagnoses(encounter.codes);
     const procedureCodes = [{ code: emCode.trim(), units: "1", modifiers: ["25"] }];
@@ -196,18 +236,21 @@ export default function EncounterDetail() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          firstname:      createFirst.trim(),
-          lastname:       createLast.trim(),
-          dob:            createDob.trim(),
-          sex:            createSex,
-          zip:            createZip.trim() || "90033",
-          departmentId:   "1",
+          firstname:        createFirst.trim(),
+          lastname:         createLast.trim(),
+          dob:              createDob.trim(),
+          sex:              createSex,
+          zip:              createZip.trim() || "90033",
+          departmentId:     "1",
           procedureCodes,
-          diagnosisCodes: diagnoses,
-          dateOfService:  encounter.dateOfService,
+          diagnosisCodes:   diagnoses,
+          dateOfService:    encounter.dateOfService,
           includeQ3014,
-          gpsLat: encounter.latitude,
-          gpsLng: encounter.longitude,
+          gpsLat:           encounter.latitude,
+          gpsLng:           encounter.longitude,
+          liveLat:          live?.lat ?? null,
+          liveLng:          live?.lng ?? null,
+          liveGpsTimestamp: live?.timestamp ?? null,
         }),
       });
 
@@ -244,22 +287,32 @@ export default function EncounterDetail() {
 
   async function handleSubmitClaim() {
     if (!encounter || !athenaPatientId.trim()) return;
+
+    // Capture live GPS at billing time — audit pillar 3
+    setGpsStatus("capturing");
+    const live = await captureCurrentGps();
+    if (live) { setLiveGps(live); setGpsStatus("granted"); }
+    else       { setGpsStatus("denied"); }
+
     setClaimState({ status: "submitting" });
-    const diagnoses     = deriveDiagnoses(encounter.codes);
+    const diagnoses      = deriveDiagnoses(encounter.codes);
     const procedureCodes = [{ code: emCode.trim(), units: "1", modifiers: ["25"] }];
     try {
       const res = await fetch("/api/athena/claims", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          athenaPatientId: athenaPatientId.trim(),
+          athenaPatientId:  athenaPatientId.trim(),
           procedureCodes,
-          diagnosisCodes:  diagnoses,
-          dateOfService:   encounter.dateOfService,
+          diagnosisCodes:   diagnoses,
+          dateOfService:    encounter.dateOfService,
           placeOfServiceId: encounter.posCode ?? "27",
           includeQ3014,
-          gpsLat: encounter.latitude,
-          gpsLng: encounter.longitude,
+          gpsLat:           encounter.latitude,
+          gpsLng:           encounter.longitude,
+          liveLat:          live?.lat ?? null,
+          liveLng:          live?.lng ?? null,
+          liveGpsTimestamp: live?.timestamp ?? null,
         }),
       });
       const data = await res.json() as { claimId?: string; error?: string };
@@ -739,13 +792,34 @@ export default function EncounterDetail() {
                   </div>
                 </label>
 
+                {/* ── GPS Audit Badge ── */}
+                {gpsStatus !== "idle" && (
+                  <div className={`flex items-center gap-2 px-3 py-2 rounded-md text-xs border ${
+                    gpsStatus === "capturing" ? "bg-blue-50 border-blue-200 text-blue-700" :
+                    gpsStatus === "granted"   ? "bg-green-50 border-green-200 text-green-700" :
+                                               "bg-yellow-50 border-yellow-200 text-yellow-700"
+                  }`}>
+                    {gpsStatus === "capturing" && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
+                    {gpsStatus === "granted"   && <ShieldCheck className="w-3.5 h-3.5 shrink-0" />}
+                    {gpsStatus === "denied"    && <AlertTriangle className="w-3.5 h-3.5 shrink-0" />}
+                    <span>
+                      {gpsStatus === "capturing" && "Capturing your location for POS 27 audit proof…"}
+                      {gpsStatus === "granted"   && liveGps && `GPS locked: ${liveGps.lat.toFixed(5)}, ${liveGps.lng.toFixed(5)} — stamped on claim`}
+                      {gpsStatus === "denied"    && "GPS unavailable — encounter coordinates used as fallback"}
+                    </span>
+                    {gpsStatus === "granted" && <Lock className="w-3 h-3 ml-auto shrink-0" />}
+                  </div>
+                )}
+
                 {/* ── Submit Button ── */}
                 <Button
                   onClick={handleSubmitClaim}
-                  disabled={claimState.status === "submitting" || !athenaPatientId.trim()}
+                  disabled={claimState.status === "submitting" || gpsStatus === "capturing" || !athenaPatientId.trim()}
                   className="w-full bg-blue-600 hover:bg-blue-700 text-white"
                 >
-                  {claimState.status === "submitting" ? (
+                  {gpsStatus === "capturing" ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Locking GPS…</>
+                  ) : claimState.status === "submitting" ? (
                     <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Submitting Claim…</>
                   ) : (
                     <><Send className="w-4 h-4 mr-2" /> Submit Street Claim (POS 27)</>
@@ -753,7 +827,7 @@ export default function EncounterDetail() {
                 </Button>
 
                 <p className="text-xs text-gray-400 text-center">
-                  Sandbox · Practice 195900 · Dept 1 · Provider 10
+                  Sandbox · Practice 195900 · Dept 1 · Provider 10 · Z59.01 + GPS claimnote
                 </p>
               </>
             )}

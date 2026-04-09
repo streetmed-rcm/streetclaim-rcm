@@ -206,6 +206,9 @@ router.post("/athena/claims", async (req: Request, res: Response) => {
     includeQ3014,
     gpsLat,
     gpsLng,
+    liveLat,
+    liveLng,
+    liveGpsTimestamp,
   } = req.body as Partial<StreetClaimPayload>;
 
   if (!athenaPatientId || typeof athenaPatientId !== "string") {
@@ -225,15 +228,18 @@ router.post("/athena/claims", async (req: Request, res: Response) => {
     const claimId = await submitStreetClaim({
       athenaPatientId,
       procedureCodes,
-      diagnosisCodes: diagnosisCodes ?? [],
+      diagnosisCodes:   diagnosisCodes ?? [],
       dateOfService,
       departmentId,
       facilityId,
       billingProviderId,
       referringProviderId,
-      includeQ3014: includeQ3014 === true,
-      gpsLat: typeof gpsLat === "number" ? gpsLat : null,
-      gpsLng: typeof gpsLng === "number" ? gpsLng : null,
+      includeQ3014:     includeQ3014 === true,
+      gpsLat:           typeof gpsLat === "number" ? gpsLat : null,
+      gpsLng:           typeof gpsLng === "number" ? gpsLng : null,
+      liveLat:          typeof liveLat === "number" ? liveLat : null,
+      liveLng:          typeof liveLng === "number" ? liveLng : null,
+      liveGpsTimestamp: typeof liveGpsTimestamp === "string" ? liveGpsTimestamp : null,
     });
 
     console.log(`[athena/claims] Claim submitted — claimId=${claimId} patient=${athenaPatientId}`);
@@ -378,6 +384,7 @@ router.post("/athena/submit-visit", async (req: Request, res: Response) => {
     firstname, lastname, dob, sex, zip, departmentId,
     procedureCodes, diagnosisCodes, dateOfService,
     includeQ3014, gpsLat, gpsLng,
+    liveLat, liveLng, liveGpsTimestamp,
   } = req.body as Partial<SubmitVisitPayload>;
 
   if (!firstname?.trim()) { res.status(400).json({ error: "firstname is required." }); return; }
@@ -391,18 +398,21 @@ router.post("/athena/submit-visit", async (req: Request, res: Response) => {
 
   try {
     const result = await submitVisit({
-      firstname:     firstname.trim(),
-      lastname:      lastname.trim(),
-      dob:           dob.trim(),
-      sex:           sex?.trim(),
-      zip:           zip?.trim(),
-      departmentId:  departmentId?.trim() ?? "1",
+      firstname:        firstname.trim(),
+      lastname:         lastname.trim(),
+      dob:              dob.trim(),
+      sex:              sex?.trim(),
+      zip:              zip?.trim(),
+      departmentId:     departmentId?.trim() ?? "1",
       procedureCodes,
-      diagnosisCodes: diagnosisCodes ?? [],
-      dateOfService:  dateOfService.trim(),
-      includeQ3014:   includeQ3014 === true,
-      gpsLat:         typeof gpsLat === "number" ? gpsLat : null,
-      gpsLng:         typeof gpsLng === "number" ? gpsLng : null,
+      diagnosisCodes:   diagnosisCodes ?? [],
+      dateOfService:    dateOfService.trim(),
+      includeQ3014:     includeQ3014 === true,
+      gpsLat:           typeof gpsLat === "number" ? gpsLat : null,
+      gpsLng:           typeof gpsLng === "number" ? gpsLng : null,
+      liveLat:          typeof liveLat === "number" ? liveLat : null,
+      liveLng:          typeof liveLng === "number" ? liveLng : null,
+      liveGpsTimestamp: typeof liveGpsTimestamp === "string" ? liveGpsTimestamp : null,
     });
 
     console.log(`[athena/submit-visit] Success — patient=${result.patientId} claim=${result.claimId}`);

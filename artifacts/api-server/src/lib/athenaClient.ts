@@ -275,8 +275,13 @@ export interface SubmitVisitPayload {
   diagnosisCodes: ClaimDiagnosis[];
   dateOfService: string;
   includeQ3014?: boolean;
+  /** Encounter-level GPS — captured when the clinician opened the encounter */
   gpsLat?: number | null;
   gpsLng?: number | null;
+  /** Live GPS — captured at the moment the Submit button was pressed */
+  liveLat?: number | null;
+  liveLng?: number | null;
+  liveGpsTimestamp?: string | null;
 }
 
 export interface SubmitVisitResult {
@@ -310,14 +315,17 @@ export async function submitVisit(
 
   // Step 2: Submit POS 27 claim
   const claimId = await submitStreetClaim({
-    athenaPatientId: patientId,
-    procedureCodes:  payload.procedureCodes,
-    diagnosisCodes:  payload.diagnosisCodes,
-    dateOfService:   payload.dateOfService,
-    departmentId:    payload.departmentId,
-    includeQ3014:    payload.includeQ3014,
-    gpsLat:          payload.gpsLat,
-    gpsLng:          payload.gpsLng,
+    athenaPatientId:  patientId,
+    procedureCodes:   payload.procedureCodes,
+    diagnosisCodes:   payload.diagnosisCodes,
+    dateOfService:    payload.dateOfService,
+    departmentId:     payload.departmentId,
+    includeQ3014:     payload.includeQ3014,
+    gpsLat:           payload.gpsLat,
+    gpsLng:           payload.gpsLng,
+    liveLat:          payload.liveLat,
+    liveLng:          payload.liveLng,
+    liveGpsTimestamp: payload.liveGpsTimestamp,
   });
 
   console.log(`[submitVisit] patient=${patientId} claim=${claimId} practice=${practiceId}`);
@@ -350,8 +358,13 @@ export interface StreetClaimPayload {
   procedureCodes: ClaimProcedure[];
   diagnosisCodes: ClaimDiagnosis[];
   includeQ3014?: boolean;
+  /** Encounter-level GPS (stored when encounter was captured in the field) */
   gpsLat?: number | null;
   gpsLng?: number | null;
+  /** Live GPS captured at submission time — for billing-time audit proof */
+  liveLat?: number | null;
+  liveLng?: number | null;
+  liveGpsTimestamp?: string | null;
 }
 
 export interface AthenaClaimResponse {
@@ -417,20 +430,31 @@ export async function submitStreetClaim(
     })),
     placeofserviceid: payload.placeOfServiceId ?? "27",
     ...(payload.facilityId ? { facilityid: payload.facilityId } : {}),
-    ...(payload.billingProviderId
-      ? { billingproviderid: payload.billingProviderId }
-      : {}),
+    // billingproviderid — default to 10 (sandbox standard) when not supplied
+    billingproviderid: payload.billingProviderId ?? "10",
     ...(payload.referringProviderId
       ? { referringproviderid: payload.referringProviderId }
       : {}),
   };
 
-  // GPS audit trail block — required for POS 27 audit protection
-  const captureTime = new Date().toISOString();
+  // ── GPS audit trail — two separate fields for maximum defensibility ──────
+  const serverTime = new Date().toISOString();
+
+  // 1. claimnote  — billing-time live GPS (proves clinician was at POS 27 location)
+  //    Format matches the 2026 auditor standard referenced in street medicine guidelines.
+  if (payload.liveLat != null && payload.liveLng != null) {
+    const liveTs = payload.liveGpsTimestamp ?? serverTime;
+    body["claimnote"] = `Audit Proof: Service rendered at Lat: ${payload.liveLat}, Lng: ${payload.liveLng} at ${liveTs}`;
+  } else if (payload.gpsLat != null && payload.gpsLng != null) {
+    // Fall back to encounter GPS if live capture was denied
+    body["claimnote"] = `Audit Proof: Service rendered at Lat: ${payload.gpsLat}, Lng: ${payload.gpsLng} at ${payload.dateOfService} (encounter GPS — live capture unavailable)`;
+  }
+
+  // 2. clinicalnote — structured audit block for internal RCM audit trail
   if (payload.gpsLat != null && payload.gpsLng != null) {
-    body["clinicalnote"] = `[Street Claim Audit | GPS: ${payload.gpsLat},${payload.gpsLng} | Date: ${payload.dateOfService} | Submitted: ${captureTime} | StreetClaim RCM]`;
+    body["clinicalnote"] = `[Street Claim Audit | Encounter GPS: ${payload.gpsLat},${payload.gpsLng} | Live GPS: ${payload.liveLat ?? "denied"},${payload.liveLng ?? "denied"} | Date: ${payload.dateOfService} | Submitted: ${serverTime} | StreetClaim RCM]`;
   } else {
-    body["clinicalnote"] = `[Street Claim Audit | Date: ${payload.dateOfService} | Submitted: ${captureTime} | StreetClaim RCM]`;
+    body["clinicalnote"] = `[Street Claim Audit | Date: ${payload.dateOfService} | Submitted: ${serverTime} | StreetClaim RCM]`;
   }
 
   const result = await athenaRequest<AthenaClaimResponse[]>(
