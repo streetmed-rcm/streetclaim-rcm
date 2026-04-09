@@ -17,6 +17,14 @@ import {
   type ConditionSearchParams,
   type AllergySearchParams,
 } from "../lib/athenaFhir.js";
+import {
+  buildAuthUrl,
+  exchangeCode,
+  refreshAccessToken,
+  getStatus,
+  clearToken,
+  computeRedirectUri,
+} from "../lib/athenaOAuth.js";
 
 const router: IRouter = Router();
 
@@ -150,6 +158,140 @@ router.post("/athena/sync", async (req: Request, res: Response) => {
   }
 
   res.json({ results });
+});
+
+// ===========================================================================
+// OAuth 2.0 — Authorization Code Flow
+// Reference: athenahealth API 2026 sandbox preview environment
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// GET /athena/oauth/status — token status (safe, no secrets returned)
+// ---------------------------------------------------------------------------
+router.get("/athena/oauth/status", (_req: Request, res: Response) => {
+  const status = getStatus();
+  res.json({
+    ...status,
+    sandboxPracticeId: process.env["ATHENA_PRACTICE_ID"] ?? "195900",
+    loginUrl: "/api/athena/oauth/login",
+    docs: "GET /api/athena/oauth/login to begin the Authorization Code flow.",
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /athena/oauth/login — redirect browser to athenahealth login page
+//
+// Open this URL in the browser. After successful login, athenahealth will
+// redirect back to /api/athena/oauth/callback with a one-time auth code.
+// ---------------------------------------------------------------------------
+router.get("/athena/oauth/login", (req: Request, res: Response) => {
+  try {
+    const redirectUri = computeRedirectUri(
+      req.get("x-forwarded-host") ?? req.get("host") ?? "localhost",
+      req.get("x-forwarded-proto") ?? req.protocol,
+    );
+
+    const { url, state } = buildAuthUrl(redirectUri);
+
+    console.log(`[athena/oauth] Login initiated — redirectUri=${redirectUri} state=${state.slice(0, 8)}...`);
+    res.redirect(url);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[athena/oauth] Login error:", message);
+    res.status(500).json({ error: `OAuth login failed: ${message}` });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /athena/oauth/callback — athenahealth posts the auth code here
+//
+// 1. Validates the CSRF state parameter
+// 2. Exchanges the one-time authorization code for access + refresh tokens
+// 3. Stores tokens in memory
+// 4. Redirects the clinician's browser back to the frontend dashboard
+// ---------------------------------------------------------------------------
+router.get("/athena/oauth/callback", async (req: Request, res: Response) => {
+  const { code, state, error, error_description } = req.query as {
+    code?: string;
+    state?: string;
+    error?: string;
+    error_description?: string;
+  };
+
+  // athenahealth returned an error (e.g., user denied access)
+  if (error) {
+    console.error(`[athena/oauth] Callback error from athenahealth: ${error} — ${error_description ?? ""}`);
+    const frontendBase = process.env["REPLIT_DEV_DOMAIN"]
+      ? `https://${process.env["REPLIT_DEV_DOMAIN"]}`
+      : "";
+    return res.redirect(`${frontendBase}/?athena=error&reason=${encodeURIComponent(error_description ?? error)}`);
+  }
+
+  if (!code || !state) {
+    return res.status(400).json({ error: "Missing code or state parameter in callback." });
+  }
+
+  try {
+    const redirectUri = computeRedirectUri(
+      req.get("x-forwarded-host") ?? req.get("host") ?? "localhost",
+      req.get("x-forwarded-proto") ?? req.protocol,
+    );
+
+    const token = await exchangeCode(code, redirectUri, state);
+
+    console.log(
+      `[athena/oauth] Token exchange successful — expires ${new Date(token.expiresAt).toISOString()} practiceId=${token.practiceId}`,
+    );
+
+    // Redirect back to the frontend dashboard with a success flag
+    const frontendBase = process.env["REPLIT_DEV_DOMAIN"]
+      ? `https://${process.env["REPLIT_DEV_DOMAIN"]}`
+      : "";
+    return res.redirect(`${frontendBase}/?athena=connected`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[athena/oauth] Token exchange error:", message);
+    return res.status(500).json({
+      error: "Token exchange failed",
+      detail: message,
+      hint: "Verify ATHENA_CLIENT_ID, ATHENA_CLIENT_SECRET, and redirect URI registration in the athenahealth developer portal.",
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /athena/oauth/refresh — manually refresh the access token
+//
+// Tokens last ~60 minutes. Call this before the token expires to stay
+// connected without requiring the clinician to log in again.
+// ---------------------------------------------------------------------------
+router.post("/athena/oauth/refresh", async (_req: Request, res: Response) => {
+  try {
+    const token = await refreshAccessToken();
+    res.json({
+      success: true,
+      message: "Token refreshed successfully.",
+      expiresAt: new Date(token.expiresAt).toISOString(),
+      expiresInMinutes: Math.floor((token.expiresAt - Date.now()) / 60_000),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[athena/oauth] Refresh error:", message);
+    res.status(401).json({
+      error: "Token refresh failed",
+      detail: message,
+      action: "Re-authenticate via GET /api/athena/oauth/login",
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /athena/oauth/logout — clear the stored token
+// ---------------------------------------------------------------------------
+router.delete("/athena/oauth/logout", (_req: Request, res: Response) => {
+  clearToken();
+  console.log("[athena/oauth] Token cleared (logout).");
+  res.json({ success: true, message: "athenahealth session cleared. Re-authenticate via /api/athena/oauth/login." });
 });
 
 // ---------------------------------------------------------------------------

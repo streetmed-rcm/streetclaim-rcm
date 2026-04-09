@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "wouter";
-import { Plus, RefreshCw, FileText, Stethoscope, Users, MapPin, TrendingUp, Home, Activity } from "lucide-react";
+import { Plus, RefreshCw, FileText, Stethoscope, Users, MapPin, TrendingUp, Home, Activity, Zap, AlertTriangle, CheckCircle2, LogIn, LogOut, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -67,7 +67,154 @@ function ProgramBanner() {
   );
 }
 
+// ─── athenahealth OAuth Status Widget ────────────────────────────────────
+
+interface AthenaStatus {
+  connected: boolean;
+  expired?: boolean;
+  expiresInMinutes?: number;
+  expiresAt?: string;
+  scope?: string;
+  practiceId?: string;
+  connectedAt?: string;
+  environment?: string;
+}
+
+function AthenaConnect({ flashParam }: { flashParam: string | null }) {
+  const [status, setStatus] = useState<AthenaStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [flash, setFlash] = useState<"success" | "error" | null>(
+    flashParam === "connected" ? "success" : flashParam === "error" ? "error" : null
+  );
+
+  const poll = useCallback(async () => {
+    try {
+      const res = await fetch(`${BASE}/api/athena/oauth/status`);
+      if (res.ok) setStatus(await res.json());
+    } catch { /* offline */ }
+  }, []);
+
+  useEffect(() => {
+    poll();
+    const id = setInterval(poll, 60_000);
+    return () => clearInterval(id);
+  }, [poll]);
+
+  useEffect(() => {
+    if (flash) {
+      const t = setTimeout(() => setFlash(null), 6000);
+      return () => clearTimeout(t);
+    }
+  }, [flash]);
+
+  const handleRefresh = async () => {
+    setLoading(true);
+    try {
+      await fetch(`${BASE}/api/athena/oauth/refresh`, { method: "POST" });
+      await poll();
+    } catch { /* ignore */ } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await fetch(`${BASE}/api/athena/oauth/logout`, { method: "DELETE" });
+    setStatus(null);
+    await poll();
+  };
+
+  const connected = status?.connected && !status?.expired;
+  const expiringSoon = connected && (status?.expiresInMinutes ?? 60) < 10;
+
+  return (
+    <div className={`rounded-xl border-2 px-4 py-3 flex items-start gap-3 transition-colors ${
+      flash === "success" ? "border-green-400 bg-green-50" :
+      flash === "error"   ? "border-red-300 bg-red-50" :
+      connected           ? expiringSoon ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50" :
+                            "border-gray-200 bg-white"
+    }`}>
+      {/* Icon */}
+      <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
+        connected ? expiringSoon ? "bg-amber-100" : "bg-emerald-100" : "bg-gray-100"
+      }`}>
+        <Zap className={`w-4 h-4 ${connected ? expiringSoon ? "text-amber-600" : "text-emerald-600" : "text-gray-400"}`} />
+      </div>
+
+      {/* Text */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <p className="text-sm font-bold text-gray-900">athenahealth</p>
+          {status === null
+            ? <span className="text-xs text-gray-400">checking…</span>
+            : connected
+              ? <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span className={`text-xs font-bold ${expiringSoon ? "text-amber-700" : "text-emerald-700"}`}>
+                    Connected {expiringSoon ? `— expires in ${status.expiresInMinutes}m` : ""}
+                  </span>
+                </>
+              : <>
+                  <AlertTriangle className="w-3.5 h-3.5 text-gray-400" />
+                  <span className="text-xs text-gray-500">Not connected</span>
+                </>
+          }
+        </div>
+        {connected && (
+          <p className="text-[10px] text-gray-500 mt-0.5">
+            Practice {status?.practiceId} · {status?.environment} · FHIR R4
+          </p>
+        )}
+        {!connected && (
+          <p className="text-[10px] text-gray-500 mt-0.5">
+            Connect to sync claims and patient records via FHIR R4
+          </p>
+        )}
+        {flash === "success" && (
+          <p className="text-xs font-semibold text-green-700 mt-0.5">✓ Connected to athenahealth sandbox</p>
+        )}
+        {flash === "error" && (
+          <p className="text-xs font-semibold text-red-700 mt-0.5">Authorization failed — try again</p>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        {connected ? (
+          <>
+            {expiringSoon && (
+              <button
+                onClick={handleRefresh}
+                disabled={loading}
+                className="flex items-center gap-1 text-[11px] font-bold text-amber-700 bg-amber-100 hover:bg-amber-200 rounded-lg px-2 py-1 transition-colors"
+              >
+                <RotateCcw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} /> Refresh
+              </button>
+            )}
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-1 text-[11px] font-bold text-gray-500 hover:text-red-600 bg-gray-100 hover:bg-red-50 rounded-lg px-2 py-1 transition-colors"
+            >
+              <LogOut className="w-3 h-3" /> Logout
+            </button>
+          </>
+        ) : (
+          <a
+            href={`${BASE}/api/athena/oauth/login`}
+            className="flex items-center gap-1 text-[11px] font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg px-3 py-1.5 transition-colors"
+          >
+            <LogIn className="w-3 h-3" /> Connect
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
+  const athenaParam = new URLSearchParams(
+    typeof window !== "undefined" ? window.location.search : ""
+  ).get("athena");
+
   const [encounters, setEncounters] = useState<EncounterRecord[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [syncResults, setSyncResults] = useState<Record<string, "success" | "error">>({});
@@ -121,6 +268,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-gray-50 pb-8">
       <div className="max-w-lg mx-auto px-4 pt-6 space-y-5">
         <ProgramBanner />
+        <AthenaConnect flashParam={athenaParam} />
         <div className="flex gap-3">
           <Link href="/encounter/new" className="flex-1">
             <Button className="w-full h-14 text-base bg-blue-600 hover:bg-blue-700 active:bg-blue-800 shadow-md">
