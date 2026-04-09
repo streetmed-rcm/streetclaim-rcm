@@ -15,6 +15,7 @@ import TableauPage from "@/pages/tableau";
 import HRVMOptimizerPage from "@/pages/hrvm-optimizer";
 import HrvmBuildPage from "@/pages/hrvm-build";
 import BHTrackerPage from "@/pages/bh-tracker";
+import BillingGuidePage from "@/pages/billing-guide";
 
 const queryClient = new QueryClient();
 
@@ -34,6 +35,7 @@ function Router() {
         <Route path="/hrvm" component={HRVMOptimizerPage} />
         <Route path="/hrvm-build" component={HrvmBuildPage} />
         <Route path="/bh-tracker" component={BHTrackerPage} />
+        <Route path="/billing-guide" component={BillingGuidePage} />
         <Route component={NotFound} />
       </Switch>
     </>

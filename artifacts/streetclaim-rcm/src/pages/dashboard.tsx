@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "wouter";
-import { Plus, RefreshCw, FileText, Stethoscope } from "lucide-react";
+import { Plus, RefreshCw, FileText, Stethoscope, Users, MapPin, TrendingUp, Home, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,49 @@ function statusColor(status: EncounterRecord["syncStatus"]) {
     default:
       return "bg-yellow-100 text-yellow-800 border-yellow-200";
   }
+}
+
+interface ProgramStats {
+  patients_today: number;
+  total_teams: number;
+  active_encounter: number;
+}
+
+function ProgramBanner() {
+  const [stats, setStats] = useState<ProgramStats | null>(null);
+
+  useEffect(() => {
+    fetch(`${BASE}/api/teams`)
+      .then(r => r.json())
+      .then(d => setStats(d.summary ?? null))
+      .catch(() => {});
+  }, []);
+
+  const tiles = [
+    { icon: <Activity className="w-4 h-4 text-emerald-600" />, label: "Patients Today", value: stats ? String(stats.patients_today) : "—", bg: "bg-emerald-50 border-emerald-200" },
+    { icon: <Users className="w-4 h-4 text-blue-600" />, label: "Active Teams", value: stats ? `${stats.active_encounter} / ${stats.total_teams}` : "—", bg: "bg-blue-50 border-blue-200" },
+    { icon: <TrendingUp className="w-4 h-4 text-purple-600" />, label: "Monthly Target", value: "1,000 visits", bg: "bg-purple-50 border-purple-200" },
+    { icon: <Home className="w-4 h-4 text-amber-600" />, label: "Housed Rate", value: "30–40%", bg: "bg-amber-50 border-amber-200" },
+    { icon: <MapPin className="w-4 h-4 text-red-600" />, label: "POS Code", value: "POS 27 ✓", bg: "bg-red-50 border-red-200" },
+  ];
+
+  return (
+    <div className="mb-5">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Program at a Glance</span>
+        <span className="h-px flex-1 bg-gray-200" />
+        <span className="text-[10px] text-gray-400">USC Street Medicine · LA Region</span>
+      </div>
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+        {tiles.map(t => (
+          <div key={t.label} className={`rounded-xl border p-2.5 ${t.bg} flex flex-col gap-1`}>
+            <div className="flex items-center gap-1">{t.icon}<span className="text-[10px] text-gray-500 leading-tight">{t.label}</span></div>
+            <p className="text-base font-black text-gray-900 leading-none">{t.value}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function Dashboard() {
@@ -77,6 +120,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-gray-50 pb-8">
       <div className="max-w-lg mx-auto px-4 pt-6 space-y-5">
+        <ProgramBanner />
         <div className="flex gap-3">
           <Link href="/encounter/new" className="flex-1">
             <Button className="w-full h-14 text-base bg-blue-600 hover:bg-blue-700 active:bg-blue-800 shadow-md">
