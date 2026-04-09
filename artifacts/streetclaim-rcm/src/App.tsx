@@ -14,6 +14,7 @@ import PowerBIPage from "@/pages/power-bi";
 import TableauPage from "@/pages/tableau";
 import HRVMOptimizerPage from "@/pages/hrvm-optimizer";
 import HrvmBuildPage from "@/pages/hrvm-build";
+import BHTrackerPage from "@/pages/bh-tracker";
 
 const queryClient = new QueryClient();
 
@@ -32,6 +33,7 @@ function Router() {
         <Route path="/tableau" component={TableauPage} />
         <Route path="/hrvm" component={HRVMOptimizerPage} />
         <Route path="/hrvm-build" component={HrvmBuildPage} />
+        <Route path="/bh-tracker" component={BHTrackerPage} />
         <Route component={NotFound} />
       </Switch>
     </>
