@@ -16,6 +16,7 @@ import HRVMOptimizerPage from "@/pages/hrvm-optimizer";
 import HrvmBuildPage from "@/pages/hrvm-build";
 import BHTrackerPage from "@/pages/bh-tracker";
 import BillingGuidePage from "@/pages/billing-guide";
+import DPSSOutreachPage from "@/pages/dpss-outreach";
 
 const queryClient = new QueryClient();
 
@@ -36,6 +37,7 @@ function Router() {
         <Route path="/hrvm-build" component={HrvmBuildPage} />
         <Route path="/bh-tracker" component={BHTrackerPage} />
         <Route path="/billing-guide" component={BillingGuidePage} />
+        <Route path="/dpss-outreach" component={DPSSOutreachPage} />
         <Route component={NotFound} />
       </Switch>
     </>
