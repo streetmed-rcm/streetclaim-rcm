@@ -83,14 +83,31 @@ export function buildAuthUrl(redirectUri: string): { url: string; state: string 
   const state = generateState();
   _pendingState = state;
 
+  // ── SMART on FHIR v2 scope list ────────────────────────────────────────
+  // As of April 2026, athenahealth requires explicit SMART v2 granular scopes
+  // (the `user/<Resource>.rs` pattern — `r` = Read, `s` = Search).
+  // Without `user/Appointment.rs`, the daily report's appointment query returns
+  // a 403.  `offline_access` is required for the refresh_token grant.
+  //
+  // Reference: athenahealth Developer Portal → App Scopes → SMART on FHIR v2
+  //            "user/Appointment.rs" — Read + Search booked appointments
+  const SCOPES = [
+    "openid",               // identity (always required)
+    "offline_access",       // refresh_token support — 60-min token auto-renewal
+    "user/Appointment.rs",  // daily report — GET appointments/booked
+    "user/Patient.rs",      // FHIR patient search + read
+    "user/Observation.rs",  // FHIR observations (vitals, labs)
+    "user/Condition.rs",    // FHIR conditions (diagnosis history)
+    "user/AllergyIntolerance.rs", // FHIR allergies
+  ].join(" ");
+
   const params = new URLSearchParams({
     response_type: "code",
     client_id:     clientId,
     redirect_uri:  redirectUri,
     state,
     aud:           fhirBase,   // REQUIRED: links the auth request to Practice 195900
-    // scope list: openid covers identity; add more as athenahealth sandbox permits
-    scope: "openid",
+    scope:         SCOPES,
   });
 
   return {
