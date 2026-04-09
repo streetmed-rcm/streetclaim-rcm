@@ -18,6 +18,7 @@ import BHTrackerPage from "@/pages/bh-tracker";
 import BillingGuidePage from "@/pages/billing-guide";
 import DPSSOutreachPage from "@/pages/dpss-outreach";
 import DailyReportPage from "@/pages/daily-report";
+import HrvmSyncPage from "@/pages/hrvm-sync";
 
 const queryClient = new QueryClient();
 
@@ -40,6 +41,7 @@ function Router() {
         <Route path="/billing-guide" component={BillingGuidePage} />
         <Route path="/dpss-outreach" component={DPSSOutreachPage} />
         <Route path="/daily-report" component={DailyReportPage} />
+        <Route path="/hrvm-sync" component={HrvmSyncPage} />
         <Route component={NotFound} />
       </Switch>
     </>

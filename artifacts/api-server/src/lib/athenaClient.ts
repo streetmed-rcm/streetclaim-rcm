@@ -576,6 +576,105 @@ export async function submitStreetClaim(
   return created.claimid;
 }
 
+// ===========================================================================
+// Real Time Eligibility (RTE) — patient insurance / CIN lookup
+//
+// Calls GET /v1/{practiceId}/patients/{patientId}/insurances
+// Returns all insurance records on file.  The Medi-Cal CIN lives in the
+// `memberId` (or `insurancememberid`) field of the matching plan row.
+// ===========================================================================
+
+export interface AthenaInsurance {
+  insuranceid?:         string;
+  insurancename?:       string;
+  insuranceplanname?:   string;
+  memberId?:            string;  // Medi-Cal CIN when plan = Medi-Cal / DHCS
+  insurancememberid?:   string;  // alternate field name returned by some plan types
+  groupid?:             string;
+  copay?:               string;
+  sequencenumber?:      string;  // "1" = primary, "2" = secondary, etc.
+  insurancephone?:      string;
+  eligibilitystatus?:   string;
+  eligibilitylastchecked?: string;
+}
+
+export async function getPatientInsurances(patientId: string): Promise<AthenaInsurance[]> {
+  const practiceId = getPracticeId();
+  const result = await athenaRequest<{ insurances?: AthenaInsurance[]; totalcount?: number }>(
+    "GET",
+    `/v1/${practiceId}/patients/${patientId}/insurances`,
+  );
+  return result.insurances ?? [];
+}
+
+// ===========================================================================
+// HRVM Sync Payload builder
+//
+// Constructs the canonical JSON payload that links a street medicine encounter
+// in athenahealth to the HRVM (Harm Reduction Vending Machine) ecosystem.
+//
+// Spec source: StreetClaim HRVM Sync Structure, April 2026
+// ===========================================================================
+
+export interface HrvmSyncInput {
+  patientId:       string;  // athenahealth patient ID
+  patientName:     string;  // from athena patient record
+  cin:             string;  // Medi-Cal CIN from RTE check
+  lat:             number;
+  lng:             number;
+  mediCalPlan:     string;
+  ecmEnrolled:     boolean;
+  nextOutreachDate: string; // ISO 8601 date YYYY-MM-DD
+}
+
+export interface HrvmSyncPayload {
+  system_metadata: {
+    source:       string;
+    athena_app_id: string;
+    timestamp:    string;
+  };
+  patient: {
+    cin:       string;
+    name:      string;
+    athena_id: string;
+  };
+  clinical_risk: {
+    sdoh_code:   string;
+    pos:         string;
+    geolocation: string;
+  };
+  service_link: {
+    medi_cal_plan:      string;
+    ecm_enrolled:       boolean;
+    next_outreach_date: string;
+  };
+}
+
+export function buildHrvmSyncPayload(input: HrvmSyncInput): HrvmSyncPayload {
+  return {
+    system_metadata: {
+      source:        "StreetClaim",
+      athena_app_id: "02209848-d966-4f65-a315-5720eefa7e09",
+      timestamp:     new Date().toISOString(),
+    },
+    patient: {
+      cin:       input.cin,
+      name:      input.patientName,
+      athena_id: input.patientId,
+    },
+    clinical_risk: {
+      sdoh_code:   "Z59.01",           // Unsheltered Homelessness — always guaranteed
+      pos:         "27",               // Street-based service — always POS 27
+      geolocation: `${input.lat}, ${input.lng}`,
+    },
+    service_link: {
+      medi_cal_plan:      input.mediCalPlan,
+      ecm_enrolled:       input.ecmEnrolled,
+      next_outreach_date: input.nextOutreachDate,
+    },
+  };
+}
+
 export async function createAthenaEncounter(
   encounter: Encounter,
   athenaPatientId: string,

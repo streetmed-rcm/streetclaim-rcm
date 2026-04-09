@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Wifi, WifiOff, Map, BarChart2, Home, Menu, X, Plug, PieChart, Thermometer, ShoppingCart, ClipboardList, BookOpen, Landmark, FileText } from "lucide-react";
+import { Wifi, WifiOff, Map, BarChart2, Home, Menu, X, Plug, PieChart, Thermometer, ShoppingCart, ClipboardList, BookOpen, Landmark, FileText, Link2 } from "lucide-react";
 
 const NAV_LINKS = [
   { href: "/", label: "Dashboard", icon: <Home className="w-3.5 h-3.5" /> },
@@ -12,6 +12,7 @@ const NAV_LINKS = [
   { href: "/dpss-outreach", label: "DPSS Outreach", icon: <Landmark className="w-3.5 h-3.5" /> },
   { href: "/hrvm", label: "HRVM Score", icon: <Thermometer className="w-3.5 h-3.5" /> },
   { href: "/hrvm-build", label: "HRVM Build", icon: <ShoppingCart className="w-3.5 h-3.5" /> },
+  { href: "/hrvm-sync", label: "HRVM Sync", icon: <Link2 className="w-3.5 h-3.5" /> },
   { href: "/tableau", label: "Tableau", icon: <PieChart className="w-3.5 h-3.5" /> },
   { href: "/power-bi", label: "Power BI", icon: <Plug className="w-3.5 h-3.5" /> },
 ];

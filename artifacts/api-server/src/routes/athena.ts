@@ -8,10 +8,13 @@ import {
   searchAthenaPatients,
   createAthenaPatientQuick,
   submitVisit,
+  getPatientInsurances,
+  buildHrvmSyncPayload,
   type StreetClaimPayload,
   type PatientSearchParams as AthenaPatientSearchParams,
   type QuickPatientInput,
   type SubmitVisitPayload,
+  type HrvmSyncInput,
 } from "../lib/athenaClient.js";
 import {
   searchPatients,
@@ -132,7 +135,35 @@ router.post("/athena/sync", async (req: Request, res: Response) => {
       let athenaPatientId = patient.athenaPatientId;
 
       if (!athenaPatientId) {
-        athenaPatientId = await createAthenaPatient(patient);
+        // Search-first: query athenaOne before creating to prevent duplicates
+        const dobForSearch   = patient.dateOfBirth ?? "";
+        const firstForSearch = patient.firstName ?? "";
+        const lastForSearch  = patient.lastName  ?? "";
+
+        // Only attempt search when we have enough identity fields to produce a useful match
+        const canSearch = firstForSearch.trim() && lastForSearch.trim() && dobForSearch.trim();
+
+        if (canSearch) {
+          console.log(`[sync] Searching athenaOne for existing patient: ${firstForSearch} ${lastForSearch} DOB:${dobForSearch}`);
+          const existing = await searchAthenaPatients({
+            firstname: firstForSearch,
+            lastname:  lastForSearch,
+            dob:       dobForSearch,
+            limit:     5,
+          });
+
+          if (existing.length > 0) {
+            athenaPatientId = existing[0].patientid;
+            console.log(`[sync] Found existing athenaOne patient ID ${athenaPatientId} — skipping registration`);
+          } else {
+            console.log(`[sync] No match found — registering new patient for encounter ${encounterId}`);
+            athenaPatientId = await createAthenaPatient(patient);
+          }
+        } else {
+          console.log(`[sync] Skipping dedup search (missing name/DOB) — registering new patient for encounter ${encounterId}`);
+          athenaPatientId = await createAthenaPatient(patient);
+        }
+
         await db
           .update(patientsTable)
           .set({ athenaPatientId })
@@ -728,6 +759,111 @@ router.get("/athena/fhir/patients/:patientId/ccda", async (req: Request, res: Re
 });
 
 // ===========================================================================
+// HRVM Sync Routes
+//
+// Two endpoints that close the loop between a street medicine encounter in
+// athenahealth and the HRVM (Harm Reduction Vending Machine) ecosystem:
+//
+//   POST /athena/hrvm/rte     — Real Time Eligibility check; returns all
+//                               insurance records on file for a patient,
+//                               including the Medi-Cal CIN.
+//
+//   POST /athena/hrvm/sync    — Builds and returns the canonical HRVM sync
+//                               JSON payload (system_metadata + patient +
+//                               clinical_risk + service_link).
+//
+// Reference: StreetClaim HRVM Sync Spec, April 2026
+//            athenahealth sandbox: ap25sandbox.fhirapi.athenahealth.com/demoAPIServer
+//            V22 sandbox discontinued: May 1 2026 — V25 endpoints in use ✓
+// ===========================================================================
+
+// POST /athena/hrvm/rte — Real Time Eligibility check for a patient
+// Body: { patientId: string }
+router.post("/athena/hrvm/rte", async (req: Request, res: Response) => {
+  if (!athenaConfigured()) {
+    res.status(503).json({ error: "athenahealth integration is not configured." });
+    return;
+  }
+
+  const { patientId } = req.body as { patientId?: string };
+  if (!patientId?.trim()) {
+    res.status(400).json({ error: "patientId is required." });
+    return;
+  }
+
+  try {
+    const insurances = await getPatientInsurances(patientId.trim());
+
+    // Surface the most likely Medi-Cal CIN: first plan where the name matches
+    // "medi-cal", "dhcs", "L.A. Care", "Anthem", "Molina", "Health Net", etc.
+    // (any managed Medi-Cal plan).  Fall back to primary insurance if none match.
+    const mediCalKeywords = /medi.?cal|dhcs|l\.?a\.?\s*care|molina|health\s*net|anthem|california/i;
+    const mediCalPlan = insurances.find(i =>
+      mediCalKeywords.test(i.insurancename ?? "") ||
+      mediCalKeywords.test(i.insuranceplanname ?? "")
+    ) ?? insurances.find(i => i.sequencenumber === "1") ?? insurances[0];
+
+    const cin = mediCalPlan?.memberId ?? mediCalPlan?.insurancememberid ?? null;
+
+    res.json({
+      patientId,
+      cin,
+      cinSource:  cin ? (mediCalPlan?.insurancename ?? mediCalPlan?.insuranceplanname ?? "Insurance on file") : null,
+      planName:   mediCalPlan?.insurancename ?? mediCalPlan?.insuranceplanname ?? null,
+      totalPlans: insurances.length,
+      insurances: insurances.map(i => ({
+        insuranceId:    i.insuranceid,
+        name:           i.insurancename,
+        planName:       i.insuranceplanname,
+        memberId:       i.memberId ?? i.insurancememberid,
+        sequence:       i.sequencenumber,
+        eligibility:    i.eligibilitystatus,
+        lastChecked:    i.eligibilitylastchecked,
+      })),
+      rteTimestamp: new Date().toISOString(),
+      endpoint: "V25 ap25sandbox.fhirapi.athenahealth.com",
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[athena/hrvm/rte] Error:", message);
+    const status = (err as Error & { statusCode?: number }).statusCode ?? 502;
+    res.status(status).json({ error: message });
+  }
+});
+
+// POST /athena/hrvm/sync — build the canonical HRVM sync payload
+// Body: HrvmSyncInput (see athenaClient.ts)
+router.post("/athena/hrvm/sync", (req: Request, res: Response) => {
+  const body = req.body as Partial<HrvmSyncInput> & { patientName?: string };
+
+  const missing: string[] = [];
+  if (!body.patientId?.trim())       missing.push("patientId");
+  if (!body.cin?.trim())             missing.push("cin");
+  if (body.lat === undefined)        missing.push("lat");
+  if (body.lng === undefined)        missing.push("lng");
+  if (!body.mediCalPlan?.trim())     missing.push("mediCalPlan");
+  if (!body.nextOutreachDate?.trim()) missing.push("nextOutreachDate");
+
+  if (missing.length > 0) {
+    res.status(400).json({ error: `Missing required fields: ${missing.join(", ")}` });
+    return;
+  }
+
+  const input: HrvmSyncInput = {
+    patientId:        body.patientId!.trim(),
+    patientName:      body.patientName?.trim() ?? "Street Medicine Patient",
+    cin:              body.cin!.trim(),
+    lat:              Number(body.lat),
+    lng:              Number(body.lng),
+    mediCalPlan:      body.mediCalPlan!.trim(),
+    ecmEnrolled:      body.ecmEnrolled ?? false,
+    nextOutreachDate: body.nextOutreachDate!.trim(),
+  };
+
+  const payload = buildHrvmSyncPayload(input);
+  res.json(payload);
+});
+
 // GET /athena/daily-report — daily outreach report for street medicine teams
 //
 // Queries athenahealth for all booked appointments on a given date within the
