@@ -13,6 +13,9 @@ export interface EncounterRecord {
   createdAt: string;
   codes?: string[];
   posCode?: string;
+  athenaPatientId?: string;
+  athenaClaimId?: string;
+  claimSubmittedAt?: string;
 }
 
 interface StreetClaimDB extends DBSchema {
@@ -92,6 +95,21 @@ export async function updateEncounterCodes(
   if (record) {
     record.codes = codes;
     record.posCode = posCode;
+    await db.put("encounters", record);
+  }
+}
+
+export async function updateEncounterClaim(
+  id: string,
+  athenaPatientId: string,
+  athenaClaimId: string
+): Promise<void> {
+  const db = await getDB();
+  const record = await db.get("encounters", id);
+  if (record) {
+    record.athenaPatientId = athenaPatientId;
+    record.athenaClaimId = athenaClaimId;
+    record.claimSubmittedAt = new Date().toISOString();
     await db.put("encounters", record);
   }
 }

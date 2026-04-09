@@ -4,6 +4,8 @@ import { eq } from "drizzle-orm";
 import {
   createAthenaPatient,
   createAthenaEncounter,
+  submitStreetClaim,
+  type StreetClaimPayload,
 } from "../lib/athenaClient.js";
 import {
   searchPatients,
@@ -158,6 +160,83 @@ router.post("/athena/sync", async (req: Request, res: Response) => {
   }
 
   res.json({ results });
+});
+
+// ---------------------------------------------------------------------------
+// POST /athena/claims — submit a street medicine claim (POS 27) to athenahealth
+//
+// Body: {
+//   athenaPatientId: string           — required, patient ID in athenahealth
+//   procedureCodes: { code, units?, modifiers? }[]  — E&M codes (e.g. 99213)
+//   diagnosisCodes: { code, description? }[]        — primary dx + SDOH Z-codes
+//   dateOfService:  string            — YYYY-MM-DD
+//   departmentId?:  string            — defaults to "1"
+//   facilityId?:    string
+//   billingProviderId?:  string
+//   referringProviderId?: string
+//   includeQ3014?:  boolean           — add Q3014 originating site fee (telehealth)
+//   gpsLat?:        number
+//   gpsLng?:        number
+// }
+//
+// Z59.01 (Unsheltered Homelessness) is always inserted as the first diagnosis.
+// POS 27 (Outreach Site) is always set.
+// ---------------------------------------------------------------------------
+router.post("/athena/claims", async (req: Request, res: Response) => {
+  if (!athenaConfigured()) {
+    res.status(503).json({ error: "athenahealth integration is not configured." });
+    return;
+  }
+
+  const {
+    athenaPatientId,
+    procedureCodes,
+    diagnosisCodes,
+    dateOfService,
+    departmentId,
+    facilityId,
+    billingProviderId,
+    referringProviderId,
+    includeQ3014,
+    gpsLat,
+    gpsLng,
+  } = req.body as Partial<StreetClaimPayload>;
+
+  if (!athenaPatientId || typeof athenaPatientId !== "string") {
+    res.status(400).json({ error: "athenaPatientId is required." });
+    return;
+  }
+  if (!Array.isArray(procedureCodes) || procedureCodes.length === 0) {
+    res.status(400).json({ error: "procedureCodes must be a non-empty array." });
+    return;
+  }
+  if (!dateOfService || typeof dateOfService !== "string") {
+    res.status(400).json({ error: "dateOfService is required (YYYY-MM-DD)." });
+    return;
+  }
+
+  try {
+    const claimId = await submitStreetClaim({
+      athenaPatientId,
+      procedureCodes,
+      diagnosisCodes: diagnosisCodes ?? [],
+      dateOfService,
+      departmentId,
+      facilityId,
+      billingProviderId,
+      referringProviderId,
+      includeQ3014: includeQ3014 === true,
+      gpsLat: typeof gpsLat === "number" ? gpsLat : null,
+      gpsLng: typeof gpsLng === "number" ? gpsLng : null,
+    });
+
+    console.log(`[athena/claims] Claim submitted — claimId=${claimId} patient=${athenaPatientId}`);
+    res.json({ claimId, message: "Claim submitted successfully." });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[athena/claims] Submission error:", message);
+    res.status(502).json({ error: message });
+  }
 });
 
 // ===========================================================================
