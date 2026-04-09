@@ -59,9 +59,26 @@ function generateState(): string {
 /**
  * Build the authorization URL and generate a CSRF state parameter.
  * Redirect the browser to the returned `url`.
+ *
+ * IMPORTANT — the `aud` (audience) parameter:
+ *   athenahealth requires `aud` to explicitly identify which practice/database
+ *   the app is requesting access to. For the sandbox, this MUST be:
+ *     https://ap25sandbox.fhirapi.athenahealth.com/demoAPIServer
+ *   "demoAPIServer" is the sandbox database name for Practice 195900.
+ *   Without `aud`, the authorization server cannot link the app to the correct
+ *   practice, and the OAuth flow will fail or return the wrong scope.
+ *
+ *   Reference: athenahealth API 2026 Sandbox Docs, §"Access My Data" Auth URL
+ *   App client ID: 02209848-d966-4f65-a315-5720eefa7e09
  */
 export function buildAuthUrl(redirectUri: string): { url: string; state: string } {
   const { clientId, baseUrl } = cfg();
+
+  // The FHIR sandbox URL doubles as the `aud` claim — it identifies which
+  // athenahealth practice/database this authorization request targets.
+  const fhirBase =
+    process.env["ATHENA_FHIR_BASE_URL"] ??
+    "https://ap25sandbox.fhirapi.athenahealth.com/demoAPIServer";
 
   const state = generateState();
   _pendingState = state;
@@ -71,6 +88,7 @@ export function buildAuthUrl(redirectUri: string): { url: string; state: string 
     client_id:     clientId,
     redirect_uri:  redirectUri,
     state,
+    aud:           fhirBase,   // REQUIRED: links the auth request to Practice 195900
     // scope list: openid covers identity; add more as athenahealth sandbox permits
     scope: "openid",
   });

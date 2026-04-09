@@ -1,12 +1,21 @@
 import { getAccessToken } from "./athenaAuth.js";
 
-function getBaseUrl(): string {
-  const baseUrl = process.env["ATHENA_BASE_URL"];
-  if (!baseUrl) {
-    throw new Error("Missing ATHENA_BASE_URL environment variable.");
-  }
-  return baseUrl;
-}
+// ─── FHIR base URL ──────────────────────────────────────────────────────────
+//
+// The athenahealth FHIR R4 sandbox lives on a completely separate domain from
+// the REST API (api.preview.platform.athenahealth.com).
+//
+// Per athenahealth documentation:
+//   FHIR R4 sandbox: https://ap25sandbox.fhirapi.athenahealth.com/demoAPIServer
+//   "demoAPIServer" is the sandbox database name that maps to Practice 195900.
+//   Calls must use the /fhir/r4 path appended after the demoAPIServer segment.
+//
+// Reference: athenahealth API 2026 — Sandbox Preview Environment, §FHIR Base URL
+// ────────────────────────────────────────────────────────────────────────────
+
+const FHIR_BASE_URL =
+  process.env["ATHENA_FHIR_BASE_URL"] ??
+  "https://ap25sandbox.fhirapi.athenahealth.com/demoAPIServer";
 
 function getPracticeId(): string {
   const practiceId = process.env["ATHENA_PRACTICE_ID"];
@@ -18,9 +27,9 @@ function getPracticeId(): string {
 
 async function fhirRequest<T>(path: string, params?: Record<string, string>): Promise<T> {
   const token = await getAccessToken();
-  const baseUrl = getBaseUrl();
 
-  const url = new URL(`${baseUrl}/fhir/r4${path}`);
+  // Correct path: <fhir_base>/fhir/r4/<resource>
+  const url = new URL(`${FHIR_BASE_URL}/fhir/r4${path}`);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       url.searchParams.set(k, v);
@@ -134,10 +143,12 @@ export async function getAllergyIntolerances(params: AllergySearchParams): Promi
 
 export async function getCcdaExport(patientId: string): Promise<string> {
   const token = await getAccessToken();
-  const baseUrl = getBaseUrl();
   const practiceId = getPracticeId();
 
-  const url = `${baseUrl}/v1/${practiceId}/ccda/${patientId}/ccdaexport`;
+  // CCDA export is a REST v1 call, not FHIR — use the REST API base URL
+  const restBase =
+    process.env["ATHENA_BASE_URL"] ?? "https://api.preview.platform.athenahealth.com";
+  const url = `${restBase}/v1/${practiceId}/ccda/${patientId}/ccdaexport`;
 
   const response = await fetch(url, {
     method: "GET",
