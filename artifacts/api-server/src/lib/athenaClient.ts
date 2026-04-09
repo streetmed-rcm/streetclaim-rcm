@@ -286,17 +286,88 @@ export interface SubmitVisitPayload {
 
 export interface SubmitVisitResult {
   patientId: string;
+  appointmentId: string;
   claimId: string;
   practiceId: string;
   /** True when a pre-existing patient record was found and reused (no duplicate created) */
   isExistingPatient: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Appointment creation + check-in (street medicine "walk-in" flow)
+// ---------------------------------------------------------------------------
+
+interface AthenaAppointmentResponse {
+  appointmentid: string;
+}
+
 /**
- * Point-of-care enrollment workflow with duplicate prevention:
- *   Step 1 — Search athenahealth for an existing patient by firstname/lastname/dob.
- *             If found, reuse that patient ID (no duplicate). If not found, register.
- *   Step 2 — Immediately submit a POS 27 street claim for that patient.
+ * Create a same-day "walk-in" appointment for the patient.
+ * In street medicine there is no scheduler — this acts as one.
+ *
+ * Returns the appointmentId string.
+ */
+export async function createAthenaAppointment(
+  patientId: string,
+  departmentId: string,
+  dateOfService: string,  // YYYY-MM-DD
+): Promise<string> {
+  const practiceId = getPracticeId();
+
+  // athenahealth appointments endpoint accepts form-encoded data
+  const appointmentDate = (() => {
+    // Convert YYYY-MM-DD to MM/DD/YYYY as the API expects
+    const [y, m, d] = dateOfService.split("-");
+    return `${m}/${d}/${y}`;
+  })();
+
+  // Use the hour closest to noon so the walk-in appears mid-schedule
+  const appointmentTime = new Date().toLocaleTimeString("en-US", {
+    hour:   "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  const result = await athenaFormRequest<AthenaAppointmentResponse[]>(
+    "POST",
+    `/v1/${practiceId}/appointments`,
+    {
+      patientid:         patientId,
+      appointmenttypeid: "1",          // Standard Visit
+      departmentid:      departmentId,
+      appointmentdate:   appointmentDate,
+      appointmenttime:   appointmentTime,
+    },
+  );
+
+  const created = Array.isArray(result) ? result[0] : result;
+  if (!created?.appointmentid) {
+    throw new Error("athenahealth did not return an appointment ID.");
+  }
+  return created.appointmentid;
+}
+
+/**
+ * Check-in the patient for their appointment — sets status to ARRIVED.
+ * This timestamps the encounter in the EHR, matching the GPS audit stamp.
+ */
+export async function checkInAppointment(appointmentId: string): Promise<void> {
+  const practiceId = getPracticeId();
+
+  // POST to the checkin sub-resource — body can be empty
+  await athenaFormRequest<unknown>(
+    "POST",
+    `/v1/${practiceId}/appointments/${appointmentId}/checkin`,
+    {},
+  );
+}
+
+/**
+ * Point-of-care "Check-In & Bill" workflow — the complete 3-step sequence:
+ *   Step 1 — Search athenahealth for an existing patient (dedup). Register if new.
+ *   Step 2 — Create a walk-in appointment for today, then check the patient in
+ *             (status → ARRIVED). Links the billing event to the clinical record.
+ *   Step 3 — Submit a POS 27 street medicine claim with GPS audit stamp.
  *
  * Z59.01 and POS 27 are guaranteed by submitStreetClaim. The caller only needs
  * to supply the clinical data captured in the field.
@@ -304,9 +375,10 @@ export interface SubmitVisitResult {
 export async function submitVisit(
   payload: SubmitVisitPayload,
 ): Promise<SubmitVisitResult> {
-  const practiceId = getPracticeId();
+  const practiceId  = getPracticeId();
+  const departmentId = payload.departmentId ?? "1";
 
-  // Step 1: Search-first — prevent duplicate patient records in athenaOne
+  // ── Step 1: Search-first — prevent duplicate patient records in athenaOne ──
   let patientId: string;
   let isExistingPatient = false;
 
@@ -319,30 +391,39 @@ export async function submitVisit(
   });
 
   if (existing.length > 0) {
-    // Reuse the first matching record — no duplicate created
     patientId         = existing[0].patientid;
     isExistingPatient = true;
     console.log(`[submitVisit] Step 1 Success: Found existing Patient ID ${patientId} — skipping registration`);
   } else {
-    // No match — register as a new patient
     patientId = await createAthenaPatientQuick({
       firstname:    payload.firstname,
       lastname:     payload.lastname,
       dob:          payload.dob,
       sex:          payload.sex,
       zip:          payload.zip,
-      departmentid: payload.departmentId ?? "1",
+      departmentid: departmentId,
     });
     console.log(`[submitVisit] Step 1 Success: Created Patient ID ${patientId}`);
   }
 
-  // Step 2: Submit POS 27 claim
+  // ── Step 2: Walk-in appointment + check-in (status → ARRIVED) ─────────────
+  const appointmentId = await createAthenaAppointment(
+    patientId,
+    departmentId,
+    payload.dateOfService,
+  );
+  console.log(`[submitVisit] Appointment Created: ${appointmentId}`);
+
+  await checkInAppointment(appointmentId);
+  console.log(`[submitVisit] Patient Checked In: Status set to ARRIVED`);
+
+  // ── Step 3: Submit POS 27 street medicine claim ────────────────────────────
   const claimId = await submitStreetClaim({
     athenaPatientId:  patientId,
     procedureCodes:   payload.procedureCodes,
     diagnosisCodes:   payload.diagnosisCodes,
     dateOfService:    payload.dateOfService,
-    departmentId:     payload.departmentId,
+    departmentId:     departmentId,
     includeQ3014:     payload.includeQ3014,
     gpsLat:           payload.gpsLat,
     gpsLng:           payload.gpsLng,
@@ -351,8 +432,8 @@ export async function submitVisit(
     liveGpsTimestamp: payload.liveGpsTimestamp,
   });
 
-  console.log(`[submitVisit] Step 2 Success: Street Claim Submitted! { claimid: ${claimId} }`);
-  return { patientId, claimId, practiceId, isExistingPatient };
+  console.log(`[submitVisit] Step 3 (Step 2) Success: Street Claim Submitted! { claimid: ${claimId} }`);
+  return { patientId, appointmentId, claimId, practiceId, isExistingPatient };
 }
 
 // ---------------------------------------------------------------------------

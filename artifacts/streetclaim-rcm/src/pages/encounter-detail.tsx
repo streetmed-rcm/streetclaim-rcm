@@ -66,7 +66,7 @@ type PatientFinderMode  = "closed" | "search" | "create";
 type PatientSearchState = "idle" | "searching" | "done" | "error";
 type PatientCreateState = "idle" | "creating" | "done" | "error";
 type ClaimSubmitState   = "idle" | "submitting" | "success" | "error";
-type SubmitVisitStep    = "idle" | "registering" | "filing" | "done" | "error";
+type SubmitVisitStep    = "idle" | "registering" | "checkin" | "filing" | "done" | "error";
 type GpsCaptureStatus   = "idle" | "capturing" | "granted" | "denied";
 
 interface LiveGps {
@@ -119,10 +119,11 @@ export default function EncounterDetail() {
   const [createState, setCreateState]         = useState<PatientCreateState>("idle");
   const [createError, setCreateError]         = useState("");
 
-  // Submit Visit (atomic: register + claim)
+  // Submit Visit (atomic: register + check-in + claim)
   const [svStep,             setSvStep]             = useState<SubmitVisitStep>("idle");
   const [svError,            setSvError]            = useState("");
   const [svIsExisting,       setSvIsExisting]       = useState(false);
+  const [svAppointmentId,    setSvAppointmentId]    = useState("");
 
   // Live GPS capture at billing time
   const [gpsStatus, setGpsStatus] = useState<GpsCaptureStatus>("idle");
@@ -255,12 +256,15 @@ export default function EncounterDetail() {
         }),
       });
 
-      // Animate step 2 briefly before resolving
+      // Animate steps 2 and 3 briefly (server already completed them)
+      setSvStep("checkin");
+      await new Promise((r) => setTimeout(r, 450));
       setSvStep("filing");
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 450));
 
       const data = await res.json() as {
         patientId?:         string;
+        appointmentId?:     string;
         claimId?:           string;
         isExistingPatient?: boolean;
         error?:             string;
@@ -273,6 +277,7 @@ export default function EncounterDetail() {
       }
 
       setSvIsExisting(data.isExistingPatient ?? false);
+      setSvAppointmentId(data.appointmentId ?? "");
       await updateEncounterClaim(encounter.id, data.patientId!, data.claimId!);
       setAthenaPatientId(data.patientId!);
       setEncounter((prev) => prev
@@ -597,23 +602,35 @@ export default function EncounterDetail() {
                         <div className="space-y-1.5">
                           <div className="flex items-center gap-2 text-emerald-700 text-xs">
                             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                            <span className="font-semibold">Visit submitted successfully!</span>
+                            <span className="font-semibold">Check-In &amp; Bill complete!</span>
                           </div>
+                          {/* Step 1 */}
                           <div className="flex items-center gap-2 text-xs text-emerald-600">
                             <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                             {svIsExisting
                               ? "Step 1 — Existing patient found, no duplicate created"
                               : "Step 1 — New patient registered in athenahealth"}
                           </div>
-                          <div className="flex items-center gap-2 text-xs text-emerald-600">
-                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                            Step 2 — POS 27 claim filed with GPS audit stamp
-                          </div>
                           {svIsExisting && (
                             <p className="text-xs text-blue-600 pl-5">
-                              Search-first check matched an existing record — patient ID reused safely.
+                              Search-first matched an existing record — patient ID reused safely.
                             </p>
                           )}
+                          {/* Step 2 — check-in */}
+                          <div className="flex items-center gap-2 text-xs text-emerald-600">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            Step 2 — Walk-in appointment created, patient status set to ARRIVED
+                            {svAppointmentId && (
+                              <span className="text-gray-400 font-mono text-xs">
+                                (Appt {svAppointmentId})
+                              </span>
+                            )}
+                          </div>
+                          {/* Step 3 — claim */}
+                          <div className="flex items-center gap-2 text-xs text-emerald-600">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            Step 3 — POS 27 claim filed with GPS audit stamp
+                          </div>
                         </div>
                       ) : createState === "done" ? (
                         <div className="flex items-center gap-2 text-emerald-700 text-xs">
@@ -629,22 +646,41 @@ export default function EncounterDetail() {
                             </p>
                           )}
 
-                          {/* Submit Visit step progress */}
-                          {(svStep === "registering" || svStep === "filing") && (
+                          {/* Submit Visit step progress (3 steps) */}
+                          {(svStep === "registering" || svStep === "checkin" || svStep === "filing") && (
                             <div className="space-y-1.5">
-                              <div className={`flex items-center gap-2 text-xs ${svStep === "registering" ? "text-emerald-700 font-semibold" : "text-emerald-500"}`}>
+                              {/* Step 1 */}
+                              <div className={`flex items-center gap-2 text-xs ${
+                                svStep === "registering" ? "text-emerald-700 font-semibold" : "text-emerald-500"
+                              }`}>
                                 {svStep === "registering"
                                   ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                   : <CheckCircle2 className="w-3.5 h-3.5" />
                                 }
-                                Step 1 of 2 — Searching athenahealth (dedup check), then registering if new…
+                                Step 1 of 3 — Searching athenahealth (dedup), then registering if new…
                               </div>
-                              <div className={`flex items-center gap-2 text-xs ${svStep === "filing" ? "text-emerald-700 font-semibold" : "text-gray-400"}`}>
+                              {/* Step 2 */}
+                              <div className={`flex items-center gap-2 text-xs ${
+                                svStep === "checkin" ? "text-emerald-700 font-semibold" :
+                                svStep === "filing"  ? "text-emerald-500" : "text-gray-400"
+                              }`}>
+                                {svStep === "registering"
+                                  ? <div className="w-3.5 h-3.5 rounded-full border border-gray-300 shrink-0" />
+                                  : svStep === "checkin"
+                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  : <CheckCircle2 className="w-3.5 h-3.5" />
+                                }
+                                Step 2 of 3 — Scheduling walk-in appointment + checking in (ARRIVED)…
+                              </div>
+                              {/* Step 3 */}
+                              <div className={`flex items-center gap-2 text-xs ${
+                                svStep === "filing" ? "text-emerald-700 font-semibold" : "text-gray-400"
+                              }`}>
                                 {svStep === "filing"
                                   ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                  : <div className="w-3.5 h-3.5 rounded-full border border-gray-300" />
+                                  : <div className="w-3.5 h-3.5 rounded-full border border-gray-300 shrink-0" />
                                 }
-                                Step 2 of 2 — Filing POS 27 claim with GPS audit stamp…
+                                Step 3 of 3 — Filing POS 27 claim with GPS audit stamp…
                               </div>
                             </div>
                           )}

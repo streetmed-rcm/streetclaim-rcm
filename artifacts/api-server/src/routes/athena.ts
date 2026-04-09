@@ -419,12 +419,26 @@ router.post("/athena/submit-visit", async (req: Request, res: Response) => {
       ? `Existing patient found (ID ${result.patientId}) — no duplicate created`
       : `New patient registered (ID ${result.patientId})`;
 
-    console.log(`[athena/submit-visit] Success — patient=${result.patientId} (existing=${result.isExistingPatient}) claim=${result.claimId}`);
+    console.log(`[athena/submit-visit] Success — patient=${result.patientId} appt=${result.appointmentId} claim=${result.claimId}`);
     res.status(201).json({
       ...result,
       steps: [
-        { step: 1, label: step1Label, patientId: result.patientId, isExistingPatient: result.isExistingPatient },
-        { step: 2, label: `POS 27 claim filed (ID ${result.claimId})`, claimId: result.claimId },
+        {
+          step:               1,
+          label:              step1Label,
+          patientId:          result.patientId,
+          isExistingPatient:  result.isExistingPatient,
+        },
+        {
+          step:          2,
+          label:         `Walk-in appointment created + patient checked in (ARRIVED) — Appt ${result.appointmentId}`,
+          appointmentId: result.appointmentId,
+        },
+        {
+          step:    3,
+          label:   `POS 27 claim filed with GPS audit stamp (Claim ID ${result.claimId})`,
+          claimId: result.claimId,
+        },
       ],
     });
   } catch (err) {
