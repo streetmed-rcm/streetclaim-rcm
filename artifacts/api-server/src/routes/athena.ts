@@ -5,7 +5,11 @@ import {
   createAthenaPatient,
   createAthenaEncounter,
   submitStreetClaim,
+  searchAthenaPatients,
+  createAthenaPatientQuick,
   type StreetClaimPayload,
+  type PatientSearchParams as AthenaPatientSearchParams,
+  type QuickPatientInput,
 } from "../lib/athenaClient.js";
 import {
   searchPatients,
@@ -235,6 +239,105 @@ router.post("/athena/claims", async (req: Request, res: Response) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[athena/claims] Submission error:", message);
+    res.status(502).json({ error: message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /athena/patients — search patients in athenahealth
+//
+// Query params (all optional):
+//   limit     — max results (default 10, max 100)
+//   status    — "active" | "inactive" | "deleted" (default: all)
+//   firstname — partial or full first name
+//   lastname  — partial or full last name
+//   dob       — date of birth MM/DD/YYYY
+// ---------------------------------------------------------------------------
+router.get("/athena/patients", async (req: Request, res: Response) => {
+  if (!athenaConfigured()) {
+    res.status(503).json({ error: "athenahealth integration is not configured." });
+    return;
+  }
+
+  const { limit, status, firstname, lastname, dob } = req.query as Record<string, string | undefined>;
+
+  const limitNum = Math.min(Number(limit ?? 10), 100);
+  if (isNaN(limitNum) || limitNum < 1) {
+    res.status(400).json({ error: "limit must be a positive integer (max 100)." });
+    return;
+  }
+
+  const params: AthenaPatientSearchParams = { limit: limitNum };
+  if (status)    params.status    = status;
+  if (firstname) params.firstname = firstname;
+  if (lastname)  params.lastname  = lastname;
+  if (dob)       params.dob       = dob;
+
+  try {
+    const patients = await searchAthenaPatients(params);
+    console.log(`[athena/patients] Found ${patients.length} patient(s) matching query`);
+    res.json({ patients, total: patients.length, practiceId: process.env["ATHENA_PRACTICE_ID"] ?? "195900" });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[athena/patients] Search error:", message);
+    res.status(502).json({ error: message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /athena/patients — create a new patient record in athenahealth
+//
+// Body: {
+//   firstname:    string  — required
+//   lastname:     string  — required
+//   dob:          string  — required, MM/DD/YYYY
+//   sex?:         string  — "M" | "F" | "O"
+//   departmentid?: string — defaults to "1"
+// }
+//
+// Returns: { patientId, firstname, lastname, practiceId }
+// ---------------------------------------------------------------------------
+router.post("/athena/patients", async (req: Request, res: Response) => {
+  if (!athenaConfigured()) {
+    res.status(503).json({ error: "athenahealth integration is not configured." });
+    return;
+  }
+
+  const { firstname, lastname, dob, sex, departmentid } = req.body as Partial<QuickPatientInput>;
+
+  if (!firstname?.trim()) {
+    res.status(400).json({ error: "firstname is required." });
+    return;
+  }
+  if (!lastname?.trim()) {
+    res.status(400).json({ error: "lastname is required." });
+    return;
+  }
+  if (!dob?.trim()) {
+    res.status(400).json({ error: "dob is required (MM/DD/YYYY)." });
+    return;
+  }
+
+  try {
+    const patientId = await createAthenaPatientQuick({
+      firstname: firstname.trim(),
+      lastname:  lastname.trim(),
+      dob:       dob.trim(),
+      sex:       sex?.trim(),
+      departmentid: departmentid?.trim() ?? "1",
+    });
+
+    console.log(`[athena/patients] Created patient ${patientId} — ${firstname} ${lastname}`);
+    res.status(201).json({
+      patientId,
+      firstname: firstname.trim(),
+      lastname:  lastname.trim(),
+      practiceId: process.env["ATHENA_PRACTICE_ID"] ?? "195900",
+      departmentId: departmentid?.trim() ?? "1",
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[athena/patients] Create error:", message);
     res.status(502).json({ error: message });
   }
 });

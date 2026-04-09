@@ -113,6 +113,82 @@ export function buildDigitalReceipt(encounter: Encounter): string {
   return `[Digital Receipt | Captured: ${captureTime} | StreetClaim RCM]`;
 }
 
+// ---------------------------------------------------------------------------
+// Patient search / create (sandbox & production)
+// ---------------------------------------------------------------------------
+
+export interface AthenaPatientSummary {
+  patientid: string;
+  firstname?: string;
+  lastname?: string;
+  dob?: string;
+  sex?: string;
+  city?: string;
+  state?: string;
+  status?: string;
+}
+
+export interface PatientSearchParams {
+  limit?: number;
+  status?: string;
+  firstname?: string;
+  lastname?: string;
+  dob?: string;
+}
+
+export async function searchAthenaPatients(
+  params: PatientSearchParams = {},
+): Promise<AthenaPatientSummary[]> {
+  const practiceId = getPracticeId();
+  const qs = new URLSearchParams();
+  qs.set("limit", String(params.limit ?? 10));
+  if (params.status)    qs.set("status",    params.status);
+  if (params.firstname) qs.set("firstname", params.firstname);
+  if (params.lastname)  qs.set("lastname",  params.lastname);
+  if (params.dob)       qs.set("dob",       params.dob);
+
+  const result = await athenaRequest<{ patients?: AthenaPatientSummary[] }>(
+    "GET",
+    `/v1/${practiceId}/patients?${qs.toString()}`,
+  );
+
+  return result.patients ?? [];
+}
+
+export interface QuickPatientInput {
+  firstname: string;
+  lastname: string;
+  dob: string;
+  sex?: string;
+  departmentid?: string;
+}
+
+export async function createAthenaPatientQuick(
+  input: QuickPatientInput,
+): Promise<string> {
+  const practiceId = getPracticeId();
+
+  const payload: Record<string, unknown> = {
+    firstname:    input.firstname,
+    lastname:     input.lastname,
+    dob:          input.dob,
+    departmentid: input.departmentid ?? "1",
+  };
+  if (input.sex) payload["sex"] = input.sex;
+
+  const result = await athenaRequest<AthenaPatientResponse[]>(
+    "POST",
+    `/v1/${practiceId}/patients`,
+    payload,
+  );
+
+  const created = Array.isArray(result) ? result[0] : result;
+  if (!created?.patientid) {
+    throw new Error("athenahealth did not return a patient ID after creation.");
+  }
+  return created.patientid;
+}
+
 export async function createAthenaPatient(patient: Patient): Promise<string> {
   const practiceId = getPracticeId();
 
