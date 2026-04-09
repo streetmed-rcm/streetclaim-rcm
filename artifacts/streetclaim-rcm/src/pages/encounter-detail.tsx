@@ -60,10 +60,11 @@ interface AthenaPatient {
   status?: string;
 }
 
-type PatientFinderMode = "closed" | "search" | "create";
+type PatientFinderMode  = "closed" | "search" | "create";
 type PatientSearchState = "idle" | "searching" | "done" | "error";
 type PatientCreateState = "idle" | "creating" | "done" | "error";
-type ClaimSubmitState  = "idle" | "submitting" | "success" | "error";
+type ClaimSubmitState   = "idle" | "submitting" | "success" | "error";
+type SubmitVisitStep    = "idle" | "registering" | "filing" | "done" | "error";
 
 export default function EncounterDetail() {
   const params  = useParams<{ id: string }>();
@@ -89,8 +90,13 @@ export default function EncounterDetail() {
   const [createLast,  setCreateLast]          = useState("");
   const [createDob,   setCreateDob]           = useState("");
   const [createSex,   setCreateSex]           = useState("M");
+  const [createZip,   setCreateZip]           = useState("90033");
   const [createState, setCreateState]         = useState<PatientCreateState>("idle");
   const [createError, setCreateError]         = useState("");
+
+  // Submit Visit (atomic: register + claim)
+  const [svStep,  setSvStep]  = useState<SubmitVisitStep>("idle");
+  const [svError, setSvError] = useState("");
 
   useEffect(() => {
     getEncounter(params.id).then((data) => {
@@ -174,6 +180,65 @@ export default function EncounterDetail() {
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Create failed");
       setCreateState("idle");
+    }
+  }
+
+  async function handleSubmitVisit() {
+    if (!encounter || !createFirst.trim() || !createLast.trim() || !createDob.trim()) return;
+    setSvStep("registering");
+    setSvError("");
+
+    const diagnoses      = deriveDiagnoses(encounter.codes);
+    const procedureCodes = [{ code: emCode.trim(), units: "1", modifiers: ["25"] }];
+
+    try {
+      const res = await fetch("/api/athena/submit-visit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          firstname:      createFirst.trim(),
+          lastname:       createLast.trim(),
+          dob:            createDob.trim(),
+          sex:            createSex,
+          zip:            createZip.trim() || "90033",
+          departmentId:   "1",
+          procedureCodes,
+          diagnosisCodes: diagnoses,
+          dateOfService:  encounter.dateOfService,
+          includeQ3014,
+          gpsLat: encounter.latitude,
+          gpsLng: encounter.longitude,
+        }),
+      });
+
+      // Animate step 2 briefly before resolving
+      setSvStep("filing");
+      await new Promise((r) => setTimeout(r, 600));
+
+      const data = await res.json() as {
+        patientId?: string;
+        claimId?:   string;
+        error?:     string;
+      };
+
+      if (!res.ok) {
+        setSvStep("error");
+        setSvError(data.error ?? `HTTP ${res.status}`);
+        return;
+      }
+
+      await updateEncounterClaim(encounter.id, data.patientId!, data.claimId!);
+      setAthenaPatientId(data.patientId!);
+      setEncounter((prev) => prev
+        ? { ...prev, athenaPatientId: data.patientId!, athenaClaimId: data.claimId!, claimSubmittedAt: new Date().toISOString() }
+        : prev
+      );
+      setClaimState({ status: "success", claimId: data.claimId });
+      setSvStep("done");
+      setTimeout(() => setFinderMode("closed"), 1500);
+    } catch (err) {
+      setSvStep("error");
+      setSvError(err instanceof Error ? err.message : "Network error");
     }
   }
 
@@ -471,18 +536,57 @@ export default function EncounterDetail() {
                         </button>
                       </div>
 
-                      {createState === "done" ? (
+                      {/* ── Submit Visit success ── */}
+                      {svStep === "done" ? (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2 text-emerald-700 text-xs">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span className="font-semibold">Visit submitted successfully!</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-emerald-600">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            Step 1 complete — patient registered
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-emerald-600">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            Step 2 complete — POS 27 claim filed
+                          </div>
+                        </div>
+                      ) : createState === "done" ? (
                         <div className="flex items-center gap-2 text-emerald-700 text-xs">
                           <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                          Patient created — ID pre-filled in the field above.
+                          Patient registered — ID pre-filled in the field above.
                         </div>
                       ) : (
                         <>
-                          {createError && (
+                          {/* Errors */}
+                          {(createError || svError) && (
                             <p className="text-xs text-red-600 flex items-center gap-1">
-                              <AlertTriangle className="w-3 h-3" /> {createError}
+                              <AlertTriangle className="w-3 h-3" /> {createError || svError}
                             </p>
                           )}
+
+                          {/* Submit Visit step progress */}
+                          {(svStep === "registering" || svStep === "filing") && (
+                            <div className="space-y-1.5">
+                              <div className={`flex items-center gap-2 text-xs ${svStep === "registering" ? "text-emerald-700 font-semibold" : "text-emerald-500"}`}>
+                                {svStep === "registering"
+                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  : <CheckCircle2 className="w-3.5 h-3.5" />
+                                }
+                                Step 1 of 2 — Registering patient in athenahealth…
+                              </div>
+                              <div className={`flex items-center gap-2 text-xs ${svStep === "filing" ? "text-emerald-700 font-semibold" : "text-gray-400"}`}>
+                                {svStep === "filing"
+                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  : <div className="w-3.5 h-3.5 rounded-full border border-gray-300" />
+                                }
+                                Step 2 of 2 — Filing POS 27 claim…
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Fields */}
                           <div className="grid grid-cols-2 gap-2">
                             <div>
                               <p className="text-xs text-emerald-700 mb-1">First name *</p>
@@ -526,20 +630,47 @@ export default function EncounterDetail() {
                                 <option value="O">Other / Unknown</option>
                               </select>
                             </div>
+                            <div className="col-span-2">
+                              <p className="text-xs text-emerald-700 mb-1">ZIP Code</p>
+                              <input
+                                type="text"
+                                value={createZip}
+                                onChange={(e) => setCreateZip(e.target.value)}
+                                placeholder="90033"
+                                maxLength={10}
+                                className="w-full border border-emerald-200 rounded px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                              />
+                            </div>
                           </div>
+
+                          {/* Primary action — atomic Submit Visit */}
                           <button
-                            onClick={handleCreate}
-                            disabled={createState === "creating" || !createFirst.trim() || !createLast.trim() || !createDob.trim()}
-                            className="w-full flex items-center justify-center gap-2 py-2 bg-emerald-600 text-white rounded-md text-xs font-medium hover:bg-emerald-700 disabled:opacity-50"
+                            onClick={handleSubmitVisit}
+                            disabled={svStep === "registering" || svStep === "filing" || !createFirst.trim() || !createLast.trim() || !createDob.trim()}
+                            className="w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 text-white rounded-md text-xs font-semibold hover:bg-blue-700 disabled:opacity-50 shadow-sm"
                           >
-                            {createState === "creating" ? (
-                              <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Creating…</>
+                            {(svStep === "registering" || svStep === "filing") ? (
+                              <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Working…</>
                             ) : (
-                              <><UserPlus className="w-3.5 h-3.5" /> Create in Sandbox (Practice 195900)</>
+                              <><Send className="w-3.5 h-3.5" /> Submit Visit (Register + POS 27 Claim)</>
                             )}
                           </button>
-                          <p className="text-xs text-gray-400">
-                            Dept 1 · Provider 10 · Z59.01 guaranteed on claim
+
+                          {/* Secondary action — register only */}
+                          <button
+                            onClick={handleCreate}
+                            disabled={createState === "creating" || svStep === "registering" || svStep === "filing" || !createFirst.trim() || !createLast.trim() || !createDob.trim()}
+                            className="w-full flex items-center justify-center gap-2 py-2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md text-xs font-medium hover:bg-emerald-100 disabled:opacity-50"
+                          >
+                            {createState === "creating" ? (
+                              <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Registering…</>
+                            ) : (
+                              <><UserPlus className="w-3.5 h-3.5" /> Register Only (no claim yet)</>
+                            )}
+                          </button>
+
+                          <p className="text-xs text-gray-400 text-center">
+                            Practice 195900 · Dept 1 · Z59.01 guaranteed
                           </p>
                         </>
                       )}

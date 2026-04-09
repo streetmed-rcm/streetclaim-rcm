@@ -79,6 +79,47 @@ async function athenaRequest<T>(
   return response.json() as Promise<T>;
 }
 
+/**
+ * athenahealth patient-creation endpoints require application/x-www-form-urlencoded.
+ * This wrapper sends the same Bearer token as athenaRequest but with form encoding.
+ */
+async function athenaFormRequest<T>(
+  method: string,
+  path: string,
+  fields: Record<string, string>,
+): Promise<T> {
+  const token   = await resolveToken();
+  const baseUrl = getBaseUrl();
+  const url     = `${baseUrl}${path}`;
+
+  const response = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams(fields).toString(),
+  });
+
+  if (!response.ok) {
+    let errorMessage = `Athenahealth API error (${response.status})`;
+    try {
+      const errorBody = (await response.json()) as { message?: string; error?: string; detailedmessage?: string };
+      errorMessage = errorBody.detailedmessage ?? errorBody.message ?? errorBody.error ?? errorMessage;
+    } catch {
+      try {
+        const errorText = await response.text();
+        if (errorText) errorMessage = `${errorMessage}: ${errorText}`;
+      } catch { /* ignore */ }
+    }
+    const err = new Error(errorMessage) as Error & { statusCode: number };
+    err.statusCode = response.status;
+    throw err;
+  }
+
+  return response.json() as Promise<T>;
+}
+
 export interface AthenaPatientResponse {
   patientid: string;
 }
@@ -160,6 +201,7 @@ export interface QuickPatientInput {
   lastname: string;
   dob: string;
   sex?: string;
+  zip?: string;
   departmentid?: string;
 }
 
@@ -168,18 +210,20 @@ export async function createAthenaPatientQuick(
 ): Promise<string> {
   const practiceId = getPracticeId();
 
-  const payload: Record<string, unknown> = {
+  // athenahealth patient endpoints require x-www-form-urlencoded
+  const fields: Record<string, string> = {
     firstname:    input.firstname,
     lastname:     input.lastname,
     dob:          input.dob,
     departmentid: input.departmentid ?? "1",
   };
-  if (input.sex) payload["sex"] = input.sex;
+  if (input.sex) fields["sex"] = input.sex;
+  if (input.zip) fields["zip"] = input.zip;
 
-  const result = await athenaRequest<AthenaPatientResponse[]>(
+  const result = await athenaFormRequest<AthenaPatientResponse[]>(
     "POST",
     `/v1/${practiceId}/patients`,
-    payload,
+    fields,
   );
 
   const created = Array.isArray(result) ? result[0] : result;
@@ -192,23 +236,20 @@ export async function createAthenaPatientQuick(
 export async function createAthenaPatient(patient: Patient): Promise<string> {
   const practiceId = getPracticeId();
 
-  const payload: Record<string, unknown> = {
-    firstname: patient.firstName,
-    lastname: patient.lastName,
-    dob: patient.dateOfBirth,
+  // athenahealth requires x-www-form-urlencoded for patient creation
+  const fields: Record<string, string> = {
+    firstname:    patient.firstName,
+    lastname:     patient.lastName,
+    dob:          patient.dateOfBirth,
+    departmentid: "1",
   };
+  if (patient.medicaidId) fields["medicaidid"] = patient.medicaidId;
+  if (patient.medicareId) fields["medicareid"]  = patient.medicareId;
 
-  if (patient.medicaidId) {
-    payload["medicaidid"] = patient.medicaidId;
-  }
-  if (patient.medicareId) {
-    payload["medicareid"] = patient.medicareId;
-  }
-
-  const result = await athenaRequest<AthenaPatientResponse[]>(
+  const result = await athenaFormRequest<AthenaPatientResponse[]>(
     "POST",
     `/v1/${practiceId}/patients`,
-    payload,
+    fields,
   );
 
   const created = Array.isArray(result) ? result[0] : result;
@@ -217,6 +258,70 @@ export async function createAthenaPatient(patient: Patient): Promise<string> {
   }
 
   return created.patientid;
+}
+
+// ---------------------------------------------------------------------------
+// Atomic "Submit Visit" — create patient + submit claim in one server call
+// ---------------------------------------------------------------------------
+
+export interface SubmitVisitPayload {
+  firstname: string;
+  lastname: string;
+  dob: string;
+  sex?: string;
+  zip?: string;
+  departmentId?: string;
+  procedureCodes: ClaimProcedure[];
+  diagnosisCodes: ClaimDiagnosis[];
+  dateOfService: string;
+  includeQ3014?: boolean;
+  gpsLat?: number | null;
+  gpsLng?: number | null;
+}
+
+export interface SubmitVisitResult {
+  patientId: string;
+  claimId: string;
+  practiceId: string;
+}
+
+/**
+ * Point-of-care enrollment workflow:
+ *   Step 1 — Register the patient in athenahealth (POST /patients, form-encoded)
+ *   Step 2 — Immediately submit a POS 27 street claim for that patient
+ *
+ * Z59.01 and POS 27 are guaranteed by submitStreetClaim. The caller only needs
+ * to supply the clinical data captured in the field.
+ */
+export async function submitVisit(
+  payload: SubmitVisitPayload,
+): Promise<SubmitVisitResult> {
+  const practiceId = getPracticeId();
+
+  // Step 1: Register patient
+  const patientId = await createAthenaPatientQuick({
+    firstname:    payload.firstname,
+    lastname:     payload.lastname,
+    dob:          payload.dob,
+    sex:          payload.sex,
+    zip:          payload.zip,
+    departmentid: payload.departmentId ?? "1",
+  });
+
+  // Step 2: Submit POS 27 claim
+  const claimId = await submitStreetClaim({
+    athenaPatientId: patientId,
+    procedureCodes:  payload.procedureCodes,
+    diagnosisCodes:  payload.diagnosisCodes,
+    dateOfService:   payload.dateOfService,
+    departmentId:    payload.departmentId,
+    includeQ3014:    payload.includeQ3014,
+    gpsLat:          payload.gpsLat,
+    gpsLng:          payload.gpsLng,
+  });
+
+  console.log(`[submitVisit] patient=${patientId} claim=${claimId} practice=${practiceId}`);
+  return { patientId, claimId, practiceId };
 }
 
 // ---------------------------------------------------------------------------

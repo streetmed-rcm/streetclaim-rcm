@@ -7,9 +7,11 @@ import {
   submitStreetClaim,
   searchAthenaPatients,
   createAthenaPatientQuick,
+  submitVisit,
   type StreetClaimPayload,
   type PatientSearchParams as AthenaPatientSearchParams,
   type QuickPatientInput,
+  type SubmitVisitPayload,
 } from "../lib/athenaClient.js";
 import {
   searchPatients,
@@ -338,6 +340,82 @@ router.post("/athena/patients", async (req: Request, res: Response) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[athena/patients] Create error:", message);
+    res.status(502).json({ error: message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /athena/submit-visit — atomic: register patient + submit POS 27 claim
+//
+// Use this for unhoused patients who have no prior record in athenahealth.
+// The two-step sequence runs server-side so the mobile client only makes
+// one network call.
+//
+// Body: {
+//   firstname:     string   — required
+//   lastname:      string   — required
+//   dob:           string   — required, MM/DD/YYYY
+//   sex?:          string   — "M" | "F" | "O"
+//   zip?:          string   — e.g. "90033" (USC/Keck area)
+//   departmentId?: string   — defaults to "1"
+//   procedureCodes: { code, units?, modifiers? }[]
+//   diagnosisCodes: { code, description? }[]
+//   dateOfService: string   — YYYY-MM-DD
+//   includeQ3014?: boolean
+//   gpsLat?:       number
+//   gpsLng?:       number
+// }
+//
+// Returns: { patientId, claimId, practiceId, steps }
+// ---------------------------------------------------------------------------
+router.post("/athena/submit-visit", async (req: Request, res: Response) => {
+  if (!athenaConfigured()) {
+    res.status(503).json({ error: "athenahealth integration is not configured." });
+    return;
+  }
+
+  const {
+    firstname, lastname, dob, sex, zip, departmentId,
+    procedureCodes, diagnosisCodes, dateOfService,
+    includeQ3014, gpsLat, gpsLng,
+  } = req.body as Partial<SubmitVisitPayload>;
+
+  if (!firstname?.trim()) { res.status(400).json({ error: "firstname is required." }); return; }
+  if (!lastname?.trim())  { res.status(400).json({ error: "lastname is required." });  return; }
+  if (!dob?.trim())       { res.status(400).json({ error: "dob is required (MM/DD/YYYY)." }); return; }
+  if (!Array.isArray(procedureCodes) || procedureCodes.length === 0) {
+    res.status(400).json({ error: "procedureCodes must be a non-empty array." });
+    return;
+  }
+  if (!dateOfService?.trim()) { res.status(400).json({ error: "dateOfService is required (YYYY-MM-DD)." }); return; }
+
+  try {
+    const result = await submitVisit({
+      firstname:     firstname.trim(),
+      lastname:      lastname.trim(),
+      dob:           dob.trim(),
+      sex:           sex?.trim(),
+      zip:           zip?.trim(),
+      departmentId:  departmentId?.trim() ?? "1",
+      procedureCodes,
+      diagnosisCodes: diagnosisCodes ?? [],
+      dateOfService:  dateOfService.trim(),
+      includeQ3014:   includeQ3014 === true,
+      gpsLat:         typeof gpsLat === "number" ? gpsLat : null,
+      gpsLng:         typeof gpsLng === "number" ? gpsLng : null,
+    });
+
+    console.log(`[athena/submit-visit] Success — patient=${result.patientId} claim=${result.claimId}`);
+    res.status(201).json({
+      ...result,
+      steps: [
+        { step: 1, label: "Patient registered",  patientId: result.patientId },
+        { step: 2, label: "POS 27 claim filed",  claimId:   result.claimId   },
+      ],
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[athena/submit-visit] Error:", message);
     res.status(502).json({ error: message });
   }
 });
